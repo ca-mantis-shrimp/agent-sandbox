@@ -17,14 +17,15 @@ RUN pacman -Syu --noconfirm --needed \
 # native binary; run it explicitly.
 RUN npm install -g @anthropic-ai/claude-code \
     && node /usr/lib/node_modules/@anthropic-ai/claude-code/install.cjs \
+    && npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.85.1 \
     && luarocks --lua-version=5.1 install busted \
     && luarocks --lua-version=5.1 install nlua
 
 # uid 1000 so `podman run --userns=keep-id` maps the agent onto the host user
 # and its commits in the mounted clone stay owned by that user.
 RUN useradd --create-home --uid 1000 agent \
-    && mkdir -p /home/agent/.cargo/registry /home/agent/target \
-    && chown -R agent:agent /home/agent/.cargo /home/agent/target
+    && mkdir -p /home/agent/.cargo/registry /home/agent/target /home/agent/.pi/agent \
+    && chown -R agent:agent /home/agent/.cargo /home/agent/target /home/agent/.pi
 
 # One build directory shared by every run (the agent-target volume), so a run
 # recompiles only what its branch changed.

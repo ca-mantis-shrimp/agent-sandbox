@@ -51,6 +51,14 @@ git -c protocol.file.allow=always submodule -q update --recursive
 git switch -q -c "$branch" && git update-ref refs/agent/base HEAD
 git submodule -q foreach "git switch -q -c $branch && git update-ref refs/agent/base HEAD"
 
+# pi reuses the host's user-level config, minus packages that break headless,
+# sandboxed runs: background tasks outlive the session, remote-pi opens a
+# control channel, pi-memory carries state between runs. Its login is the
+# sandbox's own, in the agent-pi volume, never the host's auth.json.
+pi_host="$HOME/.pi/agent"
+jq '.packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-memory"]' \
+    "$pi_host/settings.json" >"$run/pi-settings.json"
+
 echo "agent-run > building image"
 podman build -q -t "$image" "$root/agents" >/dev/null
 
@@ -66,6 +74,9 @@ podman run --rm --name "agent-$id" \
     -v "$root/agents:/agents:ro" \
     -v agent-cargo:/home/agent/.cargo/registry \
     -v agent-target:/home/agent/target \
+    -v agent-pi:/home/agent/.pi/agent \
+    -v "$run/pi-settings.json:/home/agent/.pi/agent/settings.json:ro" \
+    -v "$pi_host/agents:/home/agent/.pi/agent/agents:ro" \
     "$image" /agents/loop "$@" || status=$?
 
 if [ "$status" -eq 0 ]; then state=finished; else state=failed; fi
