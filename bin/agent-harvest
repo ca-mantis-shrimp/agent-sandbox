@@ -47,3 +47,4 @@ jq -r '.sessions[]? | "\nagent-harvest > \(.outcome) \(.action) ($\(.cost_usd))\
 
 jq --arg at "$(date -Iseconds)" '.harvested = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
     mv "$run/manifest.tmp" "$run/manifest.json"
+printf '\nagent-harvest > review the branches, then land them with: scripts/agent-land %s\n' "$id"

@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# Land a harvested agent run: merge branch agent/<id> into the checked-out
+# branch of every repo, bottom-up, then delete it.
+#
+#   scripts/agent-land <id>
+#
+# Submodules merge first; platform merges last and pins each submodule at its
+# merged HEAD. Merging platform alone lets git keep one side's pin and silently
+# drop the other side's submodule work.
+#
+# Stops on a content conflict: resolve and commit it, then rerun (finished
+# merges are skipped). Stops before deleting anything if the gate fails
+# ($AGENT_LAND_GATE, default scripts/validate-pinned).
+# Pushing stays a separate, human step. The run's work/ clone is removed; its
+# manifest and transcripts stay as the record.
+set -eu
+
+id=${1:?usage: scripts/agent-land <id>}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+branch="agent/$id"
+run="${AGENT_RUNS:-$HOME/agent-runs}/$id"
+submodules=$(git -C "$root" config --file "$root/.gitmodules" --get-regexp '\.path$' | awk '{print $2}')
+
+stop() {
+    echo "agent-land > $*" >&2
+    exit 1
+}
+
+pending() { # <repo-dir>: the run's branch exists here and is not merged yet
+    git -C "$1" rev-parse -q --verify "refs/heads/$branch" >/dev/null &&
+        ! git -C "$1" merge-base --is-ancestor "$branch" HEAD
+}
+
+for sm in $submodules; do
+    dir="$root/$sm"
+    pending "$dir" || continue
+    git -C "$dir" symbolic-ref -q HEAD >/dev/null ||
+        stop "$sm is on a detached HEAD; switch it to its default branch first"
+    echo "agent-land > merging $branch into $sm"
+    git -C "$dir" merge --no-ff --no-edit -q "$branch" ||
+        stop "conflict in $sm: resolve and commit it, then rerun"
+done
+
+cd "$root"
+if pending "$root"; then
+    echo "agent-land > merging $branch into platform"
+    # Pin conflicts are expected and resolved below; anything else stops.
+    git merge --no-ff --no-commit -q "$branch" >/dev/null 2>&1 || true
+    conflicts=$(git diff --name-only --diff-filter=U | grep -vxF "$submodules" || true)
+    [ -z "$conflicts" ] ||
+        stop "conflict in platform: $conflicts; resolve and commit it, then rerun"
+fi
+# Pin every submodule at its merged HEAD.
+# shellcheck disable=SC2086
+git add $submodules
+if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+    git commit -q --no-edit
+elif ! git diff --cached --quiet; then
+    git commit -q -m "Pin submodules: land $branch"
+fi
+
+gate=${AGENT_LAND_GATE:-scripts/validate-pinned}
+echo "agent-land > $gate"
+$gate || stop "$gate failed; branches kept, nothing deleted"
+
+for dir in "$root" $submodules; do
+    git -C "$dir" branch -q -d "$branch" 2>/dev/null || true
+done
+if [ -d "$run" ]; then
+    rm -rf "$run/work"
+    jq --arg at "$(date -Iseconds)" '.landed = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
+        mv "$run/manifest.tmp" "$run/manifest.json"
+fi
+echo "agent-land > landed $branch; review, then push"
