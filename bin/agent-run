@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# Run a headless agent against a disposable clone of platform, in a container.
+#
+#   scripts/agent-run              work the unscheduled queue (agents/loop)
+#   scripts/agent-run <action>     work just that action
+#
+# The run lives in $AGENT_RUNS/<id>/ (default ~/agent-runs):
+#   work/          a clone of platform at HEAD, every repo on branch agent/<id>
+#   transcripts/   one stream-json session per action
+#   manifest.json  id, base commit, state, timestamps
+#
+# The container sees only the run directory, plus agents/ read-only so the
+# harness stays out of the agent's reach. It has no git credentials, so its
+# output is commits; bring them back with scripts/agent-harvest <id>.
+# Needs: podman, and a podman secret `claude_token` holding a token from
+# `claude setup-token`.
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+id=$(date +%Y%m%d-%H%M%S)
+run="${AGENT_RUNS:-$HOME/agent-runs}/$id"
+branch="agent/$id"
+image=clearhead-agent
+
+mkdir -p "$run"
+manifest() { # merge a jq expression into manifest.json
+    jq "$@" "$run/manifest.json" >"$run/manifest.tmp" && mv "$run/manifest.tmp" "$run/manifest.json"
+}
+jq -n --arg id "$id" --arg base "$(git -C "$root" rev-parse HEAD)" \
+    --arg action "${1:-queue}" --arg started "$(date -Iseconds)" \
+    '{id: $id, base: $base, branch: "agent/\($id)", action: $action, state: "preparing", started: $started}' \
+    >"$run/manifest.json"
+
+echo "agent-run > cloning platform into $run/work"
+git clone -q "$root" "$run/work"
+cd "$run/work"
+# .gitmodules points at GitHub; clone each submodule from the local checkout
+# instead, so unpushed local commits are available too.
+git submodule -q init
+git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+    while read -r key path; do
+        name=${key#submodule.}
+        name=${name%.path}
+        git config "submodule.$name.url" "$root/$path"
+    done
+# Git refuses local-path submodule clones by default; these are our own repos.
+git -c protocol.file.allow=always submodule -q update --recursive
+# refs/agent/base marks where each repo started, so harvest counts exactly the
+# agent's commits.
+git switch -q -c "$branch" && git update-ref refs/agent/base HEAD
+git submodule -q foreach "git switch -q -c $branch && git update-ref refs/agent/base HEAD"
+
+echo "agent-run > building image"
+podman build -q -t "$image" "$root/agents" >/dev/null
+
+manifest '.state = "running"'
+echo "agent-run > running $id (logs: $run/transcripts/)"
+status=0
+podman run --rm --name "agent-$id" \
+    --userns=keep-id \
+    --memory 16g --cpus 8 --pids-limit 4096 \
+    --secret claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN \
+    -e AGENT_MAX_ACTIONS -e AGENT_SESSION_USD -e AGENT_RUN_USD \
+    -v "$run:/job" \
+    -v "$root/agents:/agents:ro" \
+    -v agent-cargo:/home/agent/.cargo/registry \
+    -v agent-target:/home/agent/target \
+    "$image" /agents/loop "$@" || status=$?
+
+if [ "$status" -eq 0 ]; then state=finished; else state=failed; fi
+manifest --arg state "$state" --argjson code "$status" --arg finished "$(date -Iseconds)" \
+    '.state = $state | .exit = $code | .finished = $finished'
+echo "agent-run > $state (exit $status); harvest with: scripts/agent-harvest $id"
+exit "$status"

@@ -1,0 +1,46 @@
+#!/bin/sh
+#
+# Bring an agent run's commits back into this checkout.
+#
+#   scripts/agent-harvest <id>
+#
+# Fetches branch agent/<id> from the run's clone into platform and into each
+# submodule, prints what each repo gained, and marks the run harvested. Nothing
+# is merged: review the branches, then delete $AGENT_RUNS/<id> when done.
+set -eu
+
+id=${1:?usage: scripts/agent-harvest <id>}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+run="${AGENT_RUNS:-$HOME/agent-runs}/$id"
+branch="agent/$id"
+test -d "$run/work" || { echo "agent-harvest > no run at $run" >&2; exit 1; }
+
+harvest() { # <repo-dir-in-platform> <repo-dir-in-run>
+    name=${1#"$root"/}
+    [ "$1" = "$root" ] && name=platform
+    # refs/agent/base is where agent-run started this repo.
+    if [ "$(git -C "$2" rev-list --count "refs/agent/base..$branch")" -eq 0 ]; then
+        printf 'agent-harvest > %s: no commits\n' "$name"
+    else
+        fetch "$1" "$2"
+    fi
+    # Harvest only moves commits; say so when the agent left work behind.
+    dirty=$(git -C "$2" status --porcelain --ignore-submodules)
+    [ -n "$dirty" ] && printf '    UNCOMMITTED in the run (not harvested):\n%s\n' "$dirty" | sed 's/^ /    /'
+    return 0
+}
+
+fetch() {
+    git -C "$1" fetch -q --no-recurse-submodules "$2" "$branch:$branch"
+    printf 'agent-harvest > %s:\n' "$name"
+    git -C "$2" log --oneline "refs/agent/base..$branch" | sed 's/^/    /'
+}
+
+harvest "$root" "$run/work"
+git -C "$root" config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+    while read -r _ path; do
+        harvest "$root/$path" "$run/work/$path"
+    done
+
+jq --arg at "$(date -Iseconds)" '.harvested = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
+    mv "$run/manifest.tmp" "$run/manifest.json"

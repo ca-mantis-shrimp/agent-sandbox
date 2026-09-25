@@ -1,0 +1,86 @@
+#!/bin/sh
+#
+# Container entrypoint for scripts/agent-run: work the unscheduled queue, one
+# fresh agent session per action, re-querying after each (the clearhead skill's
+# loop, driven by the shell instead of the model).
+#
+#   /agents/loop            the queue
+#   /agents/loop <action>   just that action
+#
+# Each action is attempted at most once per run. Every outcome is acceptable:
+# completed, blocked (NEEDS DECISION), or unfinished; the agent's closing
+# message says why, and it goes into manifest.json with the session's cost.
+# The run stops when no untried action is queued, or at a limit:
+#   AGENT_MAX_ACTIONS      sessions per run          (default 10)
+#   AGENT_SESSION_USD      spend cap per session     (default 3)
+#   AGENT_RUN_USD          spend cap per run         (default 15)
+set -eu
+
+cd /job/work
+echo "loop > building clearhead from this branch"
+cargo build -q --manifest-path clearhead-core/Cargo.toml -p clearhead_cli
+export PATH="$CARGO_TARGET_DIR/debug:$PATH"
+
+max=${AGENT_MAX_ACTIONS:-10}
+session_usd=${AGENT_SESSION_USD:-3}
+run_usd=${AGENT_RUN_USD:-15}
+tried=/tmp/tried
+: >"$tried"
+
+queue() {
+    clearhead query index unscheduled --format ids 2>/dev/null
+}
+
+outcome() { # <action-id>
+    if queue | grep -q "$1"; then
+        echo unfinished
+    elif clearhead read actions --format json 2>/dev/null |
+        jq -e --arg id "${1#urn:uuid:}" '.actions[] | select(.id == $id and .state == "blocked")' >/dev/null; then
+        echo blocked
+    else
+        echo completed
+    fi
+}
+
+spent() {
+    jq '[.sessions[]?.cost_usd] | add // 0' /job/manifest.json
+}
+
+# Headless sessions end when the agent replies; nothing resumes them.
+blocked_tools="ScheduleWakeup CronCreate Monitor RemoteTrigger"
+
+session() { # <action-id> <n>
+    log="/job/transcripts/$2-${1#urn:uuid:}.jsonl"
+    echo "$1" >>"$tried"
+    echo "loop > session $2: $1"
+    sed "s|{{ACTION}}|$1|g" /agents/prompt.md >/tmp/prompt.md
+    claude -p "$(cat /tmp/prompt.md)" --dangerously-skip-permissions \
+        --max-budget-usd "$session_usd" \
+        --disallowedTools $blocked_tools \
+        --output-format stream-json --verbose >"$log" || true
+    result=$(jq -s 'map(select(.type == "result")) | last // {}' "$log")
+    jq --arg a "$1" --arg o "$(outcome "$1")" --arg log "${log#/job/}" --argjson r "$result" \
+        '.sessions += [{action: $a, outcome: $o, cost_usd: ($r.total_cost_usd // 0),
+                        why: ($r.result // "no closing message"), transcript: $log}]' \
+        /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
+    jq -r '.sessions[-1] | "loop > session: \(.outcome), $\(.cost_usd)"' /job/manifest.json
+}
+
+mkdir -p /job/transcripts
+if [ $# -gt 0 ]; then
+    session "$1" 1
+    exit 0
+fi
+
+n=0
+while [ "$n" -lt "$max" ]; do
+    if jq -e --argjson cap "$run_usd" '([.sessions[]?.cost_usd] | add // 0) >= $cap' /job/manifest.json >/dev/null; then
+        echo "loop > spent \$$(spent) of AGENT_RUN_USD=$run_usd; stopping"
+        exit 0
+    fi
+    action=$(queue | grep -vxF -f "$tried" | head -n 1 || true)
+    [ -z "$action" ] && { echo "loop > no untried actions queued"; exit 0; }
+    n=$((n + 1))
+    session "$action" "$n"
+done
+echo "loop > reached AGENT_MAX_ACTIONS=$max"
