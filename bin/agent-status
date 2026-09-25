@@ -1,0 +1,72 @@
+#!/bin/sh
+#
+# On-demand summary of agent runs, read from their manifests and transcripts.
+#
+#   scripts/agent-status              one line per run
+#   scripts/agent-status <id> [n]     that run's line, then its last n tool calls (default 10)
+#
+# idle is seconds since the newest transcript event: the heartbeat, with no hook
+# into the harness. A running container idle past $AGENT_STUCK_SECS (default
+# 600) is flagged STUCK; a manifest still "running" with no container is
+# ORPHANED. spent counts finished sessions only. This is the bridge until
+# telemetry answers the same questions from the collector.
+set -eu
+
+runs="${AGENT_RUNS:-$HOME/agent-runs}"
+stuck=${AGENT_STUCK_SECS:-600}
+now=$(date +%s)
+containers=$(podman ps --format '{{.Names}}')
+
+epoch() { # <iso timestamp or empty>
+    if [ -n "$1" ]; then date -d "$1" +%s; else echo "$now"; fi
+}
+
+latest_transcript() { # <run-dir>
+    ls -t "$1"/transcripts/*.jsonl 2>/dev/null | head -n 1 || true
+}
+
+row() { # <run-dir>
+    dir=$1
+    id=$(basename "$dir")
+    m="$dir/manifest.json"
+    state=$(jq -r .state "$m")
+    latest=$(latest_transcript "$dir")
+    events=0
+    idle=-
+    if [ -n "$latest" ]; then
+        events=$(cat "$dir"/transcripts/*.jsonl | wc -l)
+        idle=$((now - $(stat -c %Y "$latest")))
+    fi
+    flag=$(jq -r 'if .landed then "landed" elif .harvested then "harvested" else "" end' "$m")
+    if printf '%s\n' "$containers" | grep -qx "agent-$id"; then
+        [ "$idle" != - ] && [ "$idle" -gt "$stuck" ] && flag=STUCK
+    elif [ "$state" = running ] || [ "$state" = preparing ]; then
+        flag=ORPHANED
+    fi
+    minutes=$((($(epoch "$(jq -r '.finished // empty' "$m")") - $(epoch "$(jq -r .started "$m")")) / 60))
+    printf '%-16s %-9s %4sm  idle %-6s events %-5s spent $%-6s %-12s %s\n' \
+        "$id" "$state" "$minutes" "$idle" "$events" \
+        "$(jq '[.sessions[]?.cost_usd] | add // 0 | . * 100 | round / 100' "$m")" \
+        "$(jq -r '[.sessions[]?.outcome] | join(",")' "$m")" "$flag"
+}
+
+# Harness-specific: Claude Code's stream-json. Moves into the claude adapter
+# when adapters exist; pi's json mode needs its own.
+claude_recent() { # <transcript> <n>
+    jq -r 'select(.type == "assistant") | .message.content[]? | select(.type == "tool_use")
+        | "  \(.name)  \((.input.command // .input.file_path // .input.pattern // .input.description // "")
+            | tostring | gsub("\n"; " ") | .[0:100])"' "$1" | tail -n "$2"
+}
+
+if [ $# -gt 0 ]; then
+    dir="$runs/$1"
+    test -f "$dir/manifest.json" || { echo "agent-status > no run at $dir" >&2; exit 1; }
+    row "$dir"
+    latest=$(latest_transcript "$dir")
+    [ -n "$latest" ] && claude_recent "$latest" "${2:-10}"
+    exit 0
+fi
+
+for dir in "$runs"/*/; do
+    [ -f "$dir/manifest.json" ] && row "${dir%/}"
+done
