@@ -21,6 +21,10 @@ RUN npm install -g @anthropic-ai/claude-code \
     && luarocks --lua-version=5.1 install busted \
     && luarocks --lua-version=5.1 install nlua
 
+# check-jsonschema for scripts/validate-pinned, isolated by uv. Its own layer
+# so adding it does not rebuild the pacman layer from a newer Arch.
+RUN UV_TOOL_DIR=/opt/uv-tools UV_TOOL_BIN_DIR=/usr/local/bin uv tool install check-jsonschema
+
 # uid 1000 so `podman run --userns=keep-id` maps the agent onto the host user
 # and its commits in the mounted clone stay owned by that user.
 RUN useradd --create-home --uid 1000 agent \
