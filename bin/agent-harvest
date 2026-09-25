@@ -42,5 +42,8 @@ git -C "$root" config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
         harvest "$root/$path" "$run/work/$path"
     done
 
+# Each session's own account, including why an action was left unfinished.
+jq -r '.sessions[]? | "\nagent-harvest > \(.outcome) \(.action) ($\(.cost_usd))\n\(.why)"' "$run/manifest.json"
+
 jq --arg at "$(date -Iseconds)" '.harvested = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
     mv "$run/manifest.tmp" "$run/manifest.json"

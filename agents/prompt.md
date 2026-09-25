@@ -12,7 +12,7 @@ Follow `docs/overnight-runbook.md` and the clearhead skill, with these differenc
 A clear account of why you stopped is worth as much as a finished action, and far more than a forced one. Stop and explain when the work needs a decision the action does not already make, grows beyond its description, or will not go green after a reasonable attempt.
 
 - **Done:** gate green, work committed, `clearhead complete action {{ACTION}}`.
-- **Needs a decision:** `clearhead update action {{ACTION}} --state blocked`, with `NEEDS DECISION: <question>` as the first line of its description, then the analysis and options. Commit that.
+- **Needs a decision:** `clearhead update action {{ACTION}} --state blocked`, with `NEEDS DECISION: <question>` as the first line of its description, then the analysis and options. Commit that. Do this the moment you find the decision point, before exploring further: the budget can end the session at any time, and a finding that is not recorded is lost.
 - **Stopped for another reason:** leave the action as it is, commit nothing half-done, and explain.
 
 Never weaken or delete a test, bypass or skip the gate, or mark an action complete to make an outcome look finished.
