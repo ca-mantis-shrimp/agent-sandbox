@@ -19,4 +19,7 @@ Never weaken or delete a test, bypass or skip the gate, or mark an action comple
 
 Your closing message is the human's record of this session. Make it state the outcome, and if not done, exactly why and what you would need.
 
-The review subagent cannot come from another vendor here. Use a fresh subagent, and note this in the action's description.
+## What this session does not do
+
+- **No review.** This is a work run; review is a separate run by another vendor, after this one and before landing. Skip the runbook's review gate and do not spawn a reviewer: its absence is not a reason to stop.
+- **No container builds.** podman is not available inside the sandbox. If the action changes a Containerfile, say in your closing message that the image build is unverified; the human builds it on the host.
