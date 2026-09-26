@@ -1,6 +1,7 @@
 #!/bin/sh
 #
-# Run a headless agent against a disposable clone of platform, in a container.
+# Run a headless agent against a disposable clone of platform, in a rootless
+# Podman Quadlet unit owned by systemd --user.
 #
 #   scripts/agent-run              work the unscheduled queue (agents/loop)
 #   scripts/agent-run <action>     work just that action
@@ -15,17 +16,40 @@
 # read-only so neither the agent nor later edits to the source can change it.
 # It has no git credentials, so its output is commits; bring them back with
 # scripts/agent-harvest <id>.
-# Needs: podman; Claude runs need the `claude_token` podman secret.
-# Set AGENT_HARNESS=pi for the sandbox's own Pi/Codex login instead.
+#
+# Host resource limits (memory, CPU, tasks/PIDs) and the wall-time deadline
+# are systemd's job, not this script's: it renders a per-run Quadlet unit,
+# starts it, and waits. systemd enforces the limits, kills the unit on OOM or
+# at the deadline, and scripts/agent-status reads the unit's state; nothing
+# here polls or supervises the container itself. scripts/agent-stop <id>
+# requests an early, graceful stop. If this foreground launcher is interrupted,
+# the systemd unit keeps running; scripts/agent-reconcile <id> finalizes its
+# manifest after the unit stops.
+#
+# Needs: podman, a systemd --user session (loginctl enable-linger helps this
+# survive outside an interactive login); Claude runs need the `claude_token`
+# podman secret. Set AGENT_HARNESS=pi for the sandbox's own Pi/Codex login
+# instead.
+#   AGENT_RUN_DEADLINE_SEC   wall-clock deadline, RuntimeMaxSec (default 21600, 6h)
+#   AGENT_STOP_GRACE_SEC     grace before SIGKILL, TimeoutStopSec (default 60)
+#
+# The unit's identity (agent-<id>.service) and journald's per-unit log are
+# also what a later interactive attach would key off; this script does not
+# implement one. `journalctl --user -u agent-<id>.service -f` follows a
+# run's output right now without it.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-quadlet.sh"
 id=$(date +%Y%m%d-%H%M%S)
 run="${AGENT_RUNS:-$HOME/agent-runs}/$id"
 branch="agent/$id"
 image=clearhead-agent
 harness=${AGENT_HARNESS:-claude}
 case "$harness" in claude|pi) ;; *) echo "agent-run > unknown harness: $harness" >&2; exit 2 ;; esac
+cpus=8
+deadline=${AGENT_RUN_DEADLINE_SEC:-21600}
+stop_grace=${AGENT_STOP_GRACE_SEC:-60}
 
 mkdir -p "$run"
 cp -R "$root/agents" "$run/agents"
@@ -36,6 +60,18 @@ jq -n --arg id "$id" --arg base "$(git -C "$root" rev-parse HEAD)" \
     --arg action "${1:-queue}" --arg harness "$harness" --arg started "$(date -Iseconds)" \
     '{id: $id, base: $base, branch: "agent/\($id)", action: $action, harness: $harness, state: "preparing", started: $started}' \
     >"$run/manifest.json"
+
+# Keep a terminal record if any preparation step fails under `set -e`.
+preparing=1
+on_exit() {
+    code=$?
+    if [ "$preparing" -eq 1 ] && [ "$code" -ne 0 ]; then
+        manifest --argjson code "$code" --arg finished "$(date -Iseconds)" \
+            '.state = "failed" | .outcome = "failed:preparation" | .exit = $code | .finished = $finished' || true
+        echo "agent-run > preparation failed (exit $code); see $run" >&2
+    fi
+}
+trap on_exit EXIT
 
 echo "agent-run > cloning platform into $run/work"
 git clone -q "$root" "$run/work"
@@ -65,33 +101,72 @@ jq '.packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-mem
     "$pi_host/settings.json" >"$run/pi-settings.json"
 
 echo "agent-run > building image"
-podman build -q -t "$image" "$root" >/dev/null
+build_status=0
+podman build -q -t "$image" "$root" >"$run/build.log" 2>&1 || build_status=$?
+if [ "$build_status" -ne 0 ]; then
+    manifest --argjson code "$build_status" --arg finished "$(date -Iseconds)" \
+        '.state = "failed" | .outcome = "failed:build" | .exit = $code | .finished = $finished'
+    echo "agent-run > image build failed (exit $build_status); see $run/build.log" >&2
+    tail -n 20 "$run/build.log" >&2
+    preparing=0
+    exit "$build_status"
+fi
+
+target=${1:-}
+entrypoint=/agents/loop
+if [ -n "$target" ]; then
+    # Exec= is parsed by Quadlet, not a shell: preserve arbitrary action
+    # selectors (including spaces and shell syntax) as one argument via a
+    # file in the already-mounted run directory.
+    printf '%s' "$target" >"$run/action-target"
+    entrypoint='/agents/loop --target-file /job/action-target'
+fi
+volumes="Volume=$run:/job
+Volume=$run/agents:/agents:ro
+Volume=agent-cargo:/home/agent/.cargo/registry
+Volume=agent-target:/home/agent/target
+Volume=agent-pi:/home/agent/.pi/agent
+Volume=$run/pi-settings.json:/home/agent/.pi/agent/settings.json:ro
+Volume=$pi_host/agents:/home/agent/.pi/agent/agents:ro"
+
+# -e NAME (no value) in the old podman-run flags meant "pass through from
+# the calling environment if set"; Environment= has no such form, so only
+# emit a line for a variable that is actually set here.
+env_line() { # <name>
+    val=$(eval "printf '%s' \"\${$1:-}\"")
+    if [ -n "$val" ]; then
+        printf 'Environment=%s=%s\n' "$1" "$val"
+    fi
+    return 0
+}
+environment=$(
+    printf 'Environment=AGENT_HARNESS=%s\n' "$harness"
+    env_line AGENT_MAX_ACTIONS
+    env_line AGENT_SESSION_USD
+    env_line AGENT_RUN_USD
+    env_line AGENT_PI_MODEL
+)
+# Only expose the Claude secret to Claude runs; Pi uses its separate volume.
+secret=""
+[ "$harness" = claude ] && secret="Secret=claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN"
+
+unit=$(quadlet_unit "$id")
+unit_dir=$(quadlet_dir)
+mkdir -p "$unit_dir"
+render_agent_unit "$id" "$image" "$entrypoint" \
+    "$volumes" "$environment" "$secret" "$((cpus * 100))" "$deadline" "$stop_grace" \
+    >"$unit_dir/$unit.container"
+systemctl --user daemon-reload
 
 manifest '.state = "running"'
-echo "agent-run > running $id (logs: $run/transcripts/)"
-status=0
-# Only expose the Claude secret to Claude runs; Pi uses its separate volume.
-target=${1:-}
-set --
-if [ "$harness" = claude ]; then
-    set -- --secret claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN
+preparing=0
+echo "agent-run > running $id as $unit.service (logs: $run/transcripts/, journalctl --user -u $unit.service)"
+systemctl --user start --wait "$unit.service" || true
+if agent_unit_active "$id"; then
+    echo "agent-run > launcher detached while $unit.service is active; use scripts/agent-reconcile $id after it stops" >&2
+    exit 1
 fi
-podman run --rm --name "agent-$id" \
-    --userns=keep-id \
-    --memory 16g --cpus 8 --pids-limit 4096 \
-    -e AGENT_MAX_ACTIONS -e AGENT_SESSION_USD -e AGENT_RUN_USD \
-    -e AGENT_HARNESS="$harness" -e AGENT_PI_MODEL \
-    -v "$run:/job" \
-    -v "$run/agents:/agents:ro" \
-    -v agent-cargo:/home/agent/.cargo/registry \
-    -v agent-target:/home/agent/target \
-    -v agent-pi:/home/agent/.pi/agent \
-    -v "$run/pi-settings.json:/home/agent/.pi/agent/settings.json:ro" \
-    -v "$pi_host/agents:/home/agent/.pi/agent/agents:ro" \
-    "$@" "$image" /agents/loop ${target:+"$target"} || status=$?
-
-if [ "$status" -eq 0 ]; then state=finished; else state=failed; fi
-manifest --arg state "$state" --argjson code "$status" --arg finished "$(date -Iseconds)" \
-    '.state = $state | .exit = $code | .finished = $finished'
-echo "agent-run > $state (exit $status); harvest with: scripts/agent-harvest $id"
-exit "$status"
+# The same finalizer can recover a stopped run if the foreground launcher
+# vanished. Never claim success or remove the unit while it remains active.
+"$root/scripts/agent-reconcile" "$id"
+echo "agent-run > harvest with: scripts/agent-harvest $id"

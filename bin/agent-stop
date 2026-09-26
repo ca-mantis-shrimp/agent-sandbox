@@ -1,0 +1,24 @@
+#!/bin/sh
+#
+# Request an early, graceful stop of a running agent-run.
+#
+#   scripts/agent-stop <id>
+#
+# Marks the run so agent-run's own reconciliation reports "stopped" instead
+# of "failed" once the unit exits (systemd can tell you a unit died from a
+# signal, but not whether a human meant it to), then asks systemd --user to
+# stop the unit: SIGTERM, then SIGKILL after its configured TimeoutStopSec.
+set -eu
+
+id=${1:?usage: scripts/agent-stop <id>}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-quadlet.sh"
+run="${AGENT_RUNS:-$HOME/agent-runs}/$id"
+test -d "$run" || { echo "agent-stop > no run at $run" >&2; exit 1; }
+
+unit="$(quadlet_unit "$id")"
+agent_unit_active "$id" || { echo "agent-stop > $unit.service is not running" >&2; exit 1; }
+
+: >"$run/.stop-requested"
+systemctl --user stop "$unit.service"
+echo "agent-stop > stop requested for $unit.service"

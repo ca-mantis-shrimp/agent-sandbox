@@ -1,21 +1,24 @@
 #!/bin/sh
 #
-# On-demand summary of agent runs, read from their manifests and transcripts.
+# On-demand summary of agent runs, read from their manifests, transcripts and
+# each run's systemd --user unit.
 #
 #   scripts/agent-status              one line per run
 #   scripts/agent-status <id> [n]     that run's line, then its last n tool calls (default 10)
 #
 # idle is seconds since the newest transcript event: the heartbeat, with no hook
-# into the harness. A running container idle past $AGENT_STUCK_SECS (default
-# 600) is flagged STUCK; a manifest still "running" with no container is
-# ORPHANED. spent counts finished sessions and shows - while a session runs. This is the bridge until
+# into the harness. A running unit idle past $AGENT_STUCK_SECS (default
+# 600) is flagged STUCK; a manifest still "running" with no active unit needs
+# `scripts/agent-reconcile <id>` after an interrupted launcher. spent counts
+# finished sessions and shows - while a session runs. This is the bridge until
 # telemetry answers the same questions from the collector.
 set -eu
 
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-quadlet.sh"
 runs="${AGENT_RUNS:-$HOME/agent-runs}"
 stuck=${AGENT_STUCK_SECS:-600}
 now=$(date +%s)
-containers=$(podman ps --format '{{.Names}}')
 
 epoch() { # <iso timestamp or empty>
     if [ -n "$1" ]; then date -d "$1" +%s; else echo "$now"; fi
@@ -38,9 +41,11 @@ row() { # <run-dir>
         idle=$((now - $(stat -c %Y "$latest")))
     fi
     flag=$(jq -r 'if .landed then "landed" elif .harvested then "harvested" else "" end' "$m")
-    if printf '%s\n' "$containers" | grep -qx "agent-$id"; then
+    if agent_unit_active "$id"; then
         [ "$idle" != - ] && [ "$idle" -gt "$stuck" ] && flag=STUCK
-    elif [ "$state" = running ] || [ "$state" = preparing ]; then
+    elif [ "$state" = running ]; then
+        flag=RECONCILE
+    elif [ "$state" = preparing ]; then
         flag=ORPHANED
     fi
     spent=\$$(jq '[.sessions[]?.cost_usd] | add // 0 | . * 100 | round / 100' "$m")
