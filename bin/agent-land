@@ -64,6 +64,16 @@ gate=${AGENT_LAND_GATE:-scripts/validate-pinned}
 echo "agent-land > $gate"
 $gate || stop "$gate failed; branches kept, nothing deleted"
 
+# The run's clone may hold the only copy of its commits (an unharvested run),
+# so delete nothing unless every repo's run tip is now in this checkout.
+if [ -d "$run/work" ]; then
+    for sm in . $submodules; do
+        tip=$(git -C "$run/work/$sm" rev-parse -q --verify "refs/heads/$branch") || continue
+        git -C "$root/$sm" merge-base --is-ancestor "$tip" HEAD 2>/dev/null ||
+            stop "$sm: the run's $branch is not in this checkout (harvested?); nothing deleted"
+    done
+fi
+
 for dir in "$root" $submodules; do
     git -C "$dir" branch -q -d "$branch" 2>/dev/null || true
 done
