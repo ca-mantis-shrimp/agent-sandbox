@@ -32,14 +32,13 @@ queue() {
 }
 
 outcome() { # <action-id>
-    if queue | grep -q "$1"; then
-        echo unfinished
-    elif clearhead read actions --format json 2>/dev/null |
-        jq -e --arg id "${1#urn:uuid:}" '.actions[] | select(.id == $id and .state == "blocked")' >/dev/null; then
-        echo blocked
-    else
-        echo completed
-    fi
+    state=$(clearhead read actions --format json 2>/dev/null |
+        jq -r --arg id "${1#urn:uuid:}" '.actions[] | select(.id == $id or .alias == $id) | .state' | head -n 1) || true
+    case "$state" in
+        completed) echo completed ;;
+        blocked) echo blocked ;;
+        *) echo unfinished ;;
+    esac
 }
 
 spent() {
@@ -48,21 +47,65 @@ spent() {
 
 # Headless sessions end when the agent replies; nothing resumes them.
 blocked_tools="ScheduleWakeup CronCreate Monitor RemoteTrigger"
+harness=${AGENT_HARNESS:-claude}
+
+pi_session() { # <prompt-file> <transcript>
+    # Pi has no built-in spend cap. Watch its usage events and terminate the
+    # session at the threshold. A single in-flight request may overshoot it.
+    prompt=$1 log=$2
+    pi -p --mode json --provider openai-codex \
+        --model "${AGENT_PI_MODEL:-gpt-5.6-sol}" \
+        --exclude-tools bg_run,bg_delegate,subagent,ScheduleWakeup \
+        "$(cat "$prompt")" >"$log" 2>"$log.stderr" &
+    agent_pid=$!
+    over=0
+    while kill -0 "$agent_pid" 2>/dev/null; do
+        cost=$(jq -s '[.[] | select(.type == "message_end") | .message.usage.cost.total // 0] | add // 0' "$log" 2>/dev/null || echo 0)
+        if jq -n -e --argjson cost "$cost" --argjson cap "$session_usd" '$cost >= $cap' >/dev/null; then
+            echo "loop > Pi session reached spend cap ($cost >= $session_usd); stopping" >&2
+            kill "$agent_pid" 2>/dev/null || true
+            over=1
+            break
+        fi
+        sleep 2
+    done
+    status=0
+    wait "$agent_pid" || status=$?
+    [ "$over" -eq 0 ] && [ "$status" -eq 0 ]
+}
 
 session() { # <action-id> <n>
     log="/job/transcripts/$2-${1#urn:uuid:}.jsonl"
     echo "$1" >>"$tried"
     echo "loop > session $2: $1"
     sed "s|{{ACTION}}|$1|g" /agents/prompt.md >/tmp/prompt.md
-    claude -p "$(cat /tmp/prompt.md)" --dangerously-skip-permissions \
-        --max-budget-usd "$session_usd" \
-        --disallowedTools $blocked_tools \
-        --output-format stream-json --verbose >"$log" || true
-    result=$(jq -s 'map(select(.type == "result")) | last // {}' "$log")
-    jq --arg a "$1" --arg o "$(outcome "$1")" --arg log "${log#/job/}" --argjson r "$result" \
-        '.sessions += [{action: $a, outcome: $o, cost_usd: ($r.total_cost_usd // 0),
-                        why: ($r.result // "no closing message"), transcript: $log}]' \
-        /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
+    if [ "$harness" = pi ]; then
+        ok=0
+        pi_session /tmp/prompt.md "$log" && ok=1
+        result=$(jq -s '{cost: ([.[] | select(.type == "message_end") | .message.usage.cost.total // 0] | add // 0),
+            last: ([.[] | select(.type == "message_end" and .message.role == "assistant") | .message] | last // {})}' "$log")
+        stop=$(printf '%s' "$result" | jq -r '.last.stopReason // empty')
+        [ "$stop" = stop ] || ok=0
+        closing=$(printf '%s' "$result" | jq -r '[.last.content[]? | select(.type == "text") | .text] | join("\n")')
+        [ -n "$closing" ] || ok=0
+        if [ "$ok" -eq 1 ]; then actual=$(outcome "$1"); else actual=unfinished; fi
+        jq --arg a "$1" --arg o "$actual" --arg log "${log#/job/}" \
+            --arg why "${closing:-Pi stopped without a closing message (stopReason: ${stop:-none}); inspect transcript and stderr}" \
+            --argjson r "$result" \
+            '.sessions += [{action: $a, outcome: $o, cost_usd: $r.cost,
+                            why: $why, stop_reason: ($r.last.stopReason // null), transcript: $log}]' \
+            /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
+    else
+        claude -p "$(cat /tmp/prompt.md)" --dangerously-skip-permissions \
+            --max-budget-usd "$session_usd" \
+            --disallowedTools $blocked_tools \
+            --output-format stream-json --verbose >"$log" || true
+        result=$(jq -s 'map(select(.type == "result")) | last // {}' "$log")
+        jq --arg a "$1" --arg o "$(outcome "$1")" --arg log "${log#/job/}" --argjson r "$result" \
+            '.sessions += [{action: $a, outcome: $o, cost_usd: ($r.total_cost_usd // 0),
+                            why: ($r.result // "no closing message"), transcript: $log}]' \
+            /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
+    fi
     jq -r '.sessions[-1] | "loop > session: \(.outcome), $\(.cost_usd)"' /job/manifest.json
 }
 

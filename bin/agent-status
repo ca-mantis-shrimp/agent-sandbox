@@ -61,12 +61,24 @@ claude_recent() { # <transcript> <n>
             | tostring | gsub("\n"; " ") | .[0:100])"' "$1" | tail -n "$2"
 }
 
+pi_recent() { # <transcript> <n>
+    jq -r 'select(.type == "message_end") | .message.content[]? | select(.type == "toolCall")
+        | "  \(.name)  \((.arguments.command // .arguments.path // "")
+            | tostring | gsub("\n"; " ") | .[0:100])"' "$1" | tail -n "$2"
+}
+
 if [ $# -gt 0 ]; then
     dir="$runs/$1"
     test -f "$dir/manifest.json" || { echo "agent-status > no run at $dir" >&2; exit 1; }
     row "$dir"
     latest=$(latest_transcript "$dir")
-    [ -n "$latest" ] && claude_recent "$latest" "${2:-10}"
+    if [ -n "$latest" ]; then
+        if [ "$(jq -r '.harness // "claude"' "$dir/manifest.json")" = pi ]; then
+            pi_recent "$latest" "${2:-10}"
+        else
+            claude_recent "$latest" "${2:-10}"
+        fi
+    fi
     exit 0
 fi
 
