@@ -7,12 +7,14 @@
 #
 # The run lives in $AGENT_RUNS/<id>/ (default ~/agent-runs):
 #   work/          a clone of platform at HEAD, every repo on branch agent/<id>
+#   agents/        the harness snapshot used for the whole run
 #   transcripts/   one stream-json session per action
 #   manifest.json  id, base commit, state, timestamps
 #
-# The container sees only the run directory, plus agents/ read-only so the
-# harness stays out of the agent's reach. It has no git credentials, so its
-# output is commits; bring them back with scripts/agent-harvest <id>.
+# The container sees only the run directory. Its harness snapshot is mounted
+# read-only so neither the agent nor later edits to the source can change it.
+# It has no git credentials, so its output is commits; bring them back with
+# scripts/agent-harvest <id>.
 # Needs: podman, and a podman secret `claude_token` holding a token from
 # `claude setup-token`.
 set -eu
@@ -24,6 +26,7 @@ branch="agent/$id"
 image=clearhead-agent
 
 mkdir -p "$run"
+cp -R "$root/agents" "$run/agents"
 manifest() { # merge a jq expression into manifest.json
     jq "$@" "$run/manifest.json" >"$run/manifest.tmp" && mv "$run/manifest.tmp" "$run/manifest.json"
 }
@@ -60,7 +63,7 @@ jq '.packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-mem
     "$pi_host/settings.json" >"$run/pi-settings.json"
 
 echo "agent-run > building image"
-podman build -q -t "$image" "$root/agents" >/dev/null
+podman build -q -t "$image" "$root" >/dev/null
 
 manifest '.state = "running"'
 echo "agent-run > running $id (logs: $run/transcripts/)"
@@ -71,7 +74,7 @@ podman run --rm --name "agent-$id" \
     --secret claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN \
     -e AGENT_MAX_ACTIONS -e AGENT_SESSION_USD -e AGENT_RUN_USD \
     -v "$run:/job" \
-    -v "$root/agents:/agents:ro" \
+    -v "$run/agents:/agents:ro" \
     -v agent-cargo:/home/agent/.cargo/registry \
     -v agent-target:/home/agent/target \
     -v agent-pi:/home/agent/.pi/agent \
