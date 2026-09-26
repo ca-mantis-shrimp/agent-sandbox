@@ -1,0 +1,56 @@
+#!/bin/sh
+# Reconcile a stopped Quadlet run, including one whose launcher was interrupted.
+# Idempotent for terminal manifests; never remove an active unit.
+set -eu
+
+id=${1:?usage: scripts/agent-reconcile <id>}
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-quadlet.sh"
+run="${AGENT_RUNS:-$HOME/agent-runs}/$id"
+manifest="$run/manifest.json"
+test -f "$manifest" || { echo "agent-reconcile > no manifest at $manifest" >&2; exit 1; }
+state=$(jq -r '.state' "$manifest")
+case "$state" in
+    finished|stopped) echo "agent-reconcile > already $state: $id"; exit 0 ;;
+    failed) echo "agent-reconcile > already failed: $id" >&2; exit 1 ;;
+    running) ;;
+    *) echo "agent-reconcile > run is $state, not running: $id" >&2; exit 1 ;;
+esac
+
+unit=$(quadlet_unit "$id")
+if agent_unit_active "$id"; then
+    echo "agent-reconcile > $unit.service is still active" >&2
+    exit 2
+fi
+props=$(agent_unit_props "$id" 2>/dev/null) || props=
+result=$(printf '%s\n' "$props" | sed -n 's/^Result=//p')
+code=$(printf '%s\n' "$props" | sed -n 's/^ExecMainCode=//p')
+mstatus=$(printf '%s\n' "$props" | sed -n 's/^ExecMainStatus=//p')
+if [ -z "$result" ] || [ -z "$code" ] || [ -z "$mstatus" ]; then
+    echo "agent-reconcile > unit result unavailable for $id; preserving the run for inspection" >&2
+    exit 2
+fi
+stop_requested=0
+[ -f "$run/.stop-requested" ] && stop_requested=1
+outcome=$(classify_agent_outcome "$result" "$code" "$mstatus" "$stop_requested")
+case "$outcome" in
+    finished) state=finished ;;
+    stopped*) state=stopped ;;
+    *) state=failed ;;
+esac
+
+# Keep the unit and its properties until the manifest is durable. A later
+# invocation can retry if writing the manifest fails.
+exit_code=${mstatus:-1}
+jq --arg state "$state" --arg outcome "$outcome" --argjson code "$exit_code" \
+    --arg finished "$(date -Iseconds)" \
+    '.state = $state | .outcome = $outcome | .exit = $code | .finished = $finished' \
+    "$manifest" >"$run/manifest.tmp"
+mv "$run/manifest.tmp" "$manifest"
+
+unit_file="$(quadlet_dir)/$unit.container"
+rm -f "$unit_file"
+systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
+systemctl --user daemon-reload >/dev/null 2>&1 || true
+echo "agent-reconcile > $state ($outcome): $id"
+[ "$state" = finished ]

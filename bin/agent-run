@@ -22,7 +22,9 @@
 # starts it, and waits. systemd enforces the limits, kills the unit on OOM or
 # at the deadline, and scripts/agent-status reads the unit's state; nothing
 # here polls or supervises the container itself. scripts/agent-stop <id>
-# requests an early, graceful stop.
+# requests an early, graceful stop. If this foreground launcher is interrupted,
+# the systemd unit keeps running; scripts/agent-reconcile <id> finalizes its
+# manifest after the unit stops.
 #
 # Needs: podman, a systemd --user session (loginctl enable-linger helps this
 # survive outside an interactive login); Claude runs need the `claude_token`
@@ -160,28 +162,11 @@ manifest '.state = "running"'
 preparing=0
 echo "agent-run > running $id as $unit.service (logs: $run/transcripts/, journalctl --user -u $unit.service)"
 systemctl --user start --wait "$unit.service" || true
-
-props=$(agent_unit_props "$id" 2>/dev/null) || true
-result=$(printf '%s\n' "$props" | sed -n 's/^Result=//p')
-code=$(printf '%s\n' "$props" | sed -n 's/^ExecMainCode=//p')
-mstatus=$(printf '%s\n' "$props" | sed -n 's/^ExecMainStatus=//p')
-stop_requested=0
-[ -f "$run/.stop-requested" ] && stop_requested=1
-
-outcome=$(classify_agent_outcome "$result" "$code" "$mstatus" "$stop_requested")
-case "$outcome" in
-    finished) state=finished ;;
-    stopped*) state=stopped ;;
-    *) state=failed ;;
-esac
-
-# The unit is per-run and disposable, like the container --rm gave before;
-# systemd generators re-scan on the next daemon-reload.
-rm -f "$unit_dir/$unit.container"
-systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
-systemctl --user daemon-reload
-
-manifest --arg state "$state" --arg outcome "$outcome" --argjson code "${mstatus:-1}" --arg finished "$(date -Iseconds)" \
-    '.state = $state | .outcome = $outcome | .exit = $code | .finished = $finished'
-echo "agent-run > $state ($outcome); harvest with: scripts/agent-harvest $id"
-[ "$state" = finished ] || exit 1
+if agent_unit_active "$id"; then
+    echo "agent-run > launcher detached while $unit.service is active; use scripts/agent-reconcile $id after it stops" >&2
+    exit 1
+fi
+# The same finalizer can recover a stopped run if the foreground launcher
+# vanished. Never claim success or remove the unit while it remains active.
+"$root/scripts/agent-reconcile" "$id"
+echo "agent-run > harvest with: scripts/agent-harvest $id"

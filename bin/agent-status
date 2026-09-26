@@ -8,8 +8,9 @@
 #
 # idle is seconds since the newest transcript event: the heartbeat, with no hook
 # into the harness. A running unit idle past $AGENT_STUCK_SECS (default
-# 600) is flagged STUCK; a manifest still "running" with no active unit is
-# ORPHANED. spent counts finished sessions and shows - while a session runs. This is the bridge until
+# 600) is flagged STUCK; a manifest still "running" with no active unit needs
+# `scripts/agent-reconcile <id>` after an interrupted launcher. spent counts
+# finished sessions and shows - while a session runs. This is the bridge until
 # telemetry answers the same questions from the collector.
 set -eu
 
@@ -42,7 +43,9 @@ row() { # <run-dir>
     flag=$(jq -r 'if .landed then "landed" elif .harvested then "harvested" else "" end' "$m")
     if agent_unit_active "$id"; then
         [ "$idle" != - ] && [ "$idle" -gt "$stuck" ] && flag=STUCK
-    elif [ "$state" = running ] || [ "$state" = preparing ]; then
+    elif [ "$state" = running ]; then
+        flag=RECONCILE
+    elif [ "$state" = preparing ]; then
         flag=ORPHANED
     fi
     spent=\$$(jq '[.sessions[]?.cost_usd] | add // 0 | . * 100 | round / 100' "$m")
