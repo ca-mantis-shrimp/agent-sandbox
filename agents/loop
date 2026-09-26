@@ -16,6 +16,13 @@
 #   AGENT_RUN_USD          spend cap per run         (default 15)
 set -eu
 
+if [ "${1:-}" = --target-file ]; then
+    [ "$#" -eq 2 ] && [ -f "$2" ] || { echo "loop > missing target file" >&2; exit 2; }
+    target=$(cat "$2")
+    [ -n "$target" ] || { echo "loop > empty target file" >&2; exit 2; }
+    set -- "$target"
+fi
+
 cd /job/work
 echo "loop > building clearhead from this branch"
 cargo build -q --manifest-path clearhead-core/Cargo.toml -p clearhead_cli

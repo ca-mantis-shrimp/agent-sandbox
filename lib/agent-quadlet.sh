@@ -1,7 +1,7 @@
 # Shared by scripts/agent-run and scripts/agent-status: Quadlet unit naming,
 # rendering, and the systemd-state-to-outcome mapping. Pure functions only
 # (stdout in, stdout out; the two systemctl calls are confined to
-# agent_unit_active and agent_unit_props), so scripts/agent-run.test.sh can
+# agent_unit_active and agent_unit_props), so scripts/agent-quadlet.test.sh can
 # source this file and check it without podman or a systemd --user session.
 #
 # Placement: $XDG_RUNTIME_DIR/containers/systemd/, not the persistent
@@ -44,6 +44,9 @@ render_agent_unit() { # <id> <image> <exec> <volumes> <environment> <secret> <cp
     # No automatic restart: a failed or timed-out run is not retried.
     printf 'Restart=no\n'
     printf 'MemoryMax=16G\n'
+    # Without a swap cap, a run can exceed MemoryMax by spilling into the
+    # host's swap (observed during the bounded host OOM smoke test).
+    printf 'MemorySwapMax=0\n'
     printf 'CPUQuota=%s%%\n' "$cpu_quota"
     printf 'TasksMax=4096\n'
     printf 'RuntimeMaxSec=%s\n' "$deadline"
@@ -62,34 +65,41 @@ agent_unit_props() { # <id>
     systemctl --user show "$(quadlet_unit "$1").service" -p Result -p ExecMainCode -p ExecMainStatus
 }
 
-# Maps one stopped unit's systemd state to an outcome. elapsed/deadline are
-# wall-clock seconds that agent-run measures itself around `systemctl start
-# --wait`, not a systemd property: RuntimeMaxSec's own Result on expiry is
-# ambiguous with a clean exit (both can read Result=success) unless
-# TimeoutStopSec *also* elapses, so a deadline hit is judged by elapsed time,
-# not by string-matching Result. oom-kill is unambiguous and systemd sets it
-# whenever the kernel OOM-killed a process in the unit's cgroup, regardless of
-# OOMPolicy, so it is trusted directly and takes priority over a
-# same-instant deadline reading.
-classify_agent_outcome() { # <result> <exec-main-code> <exec-main-status> <elapsed-sec> <deadline-sec> <stop-requested 0|1>
-    result=$1 code=$2 status=$3 elapsed=$4 deadline=$5 stop_requested=$6
+# Map one stopped unit's actual systemd result to a manifest outcome. The
+# host smoke test observes Result=timeout for RuntimeMaxSec expiry, even when
+# the unit's stop grace also expires; timing `systemctl start --wait` includes
+# container startup and would incorrectly mark a fast clean exit as timeout.
+# systemctl show uses numeric wait(2) codes: 1=CLD_EXITED, 2=CLD_KILLED,
+# 3=CLD_DUMPED. A very short successful Quadlet unit may already have reset
+# ExecMainCode to 0 by the time --wait returns; Result=success and status=0
+# remain authoritative in that case.
+classify_agent_outcome() { # <result> <exec-main-code> <exec-main-status> <stop-requested 0|1>
+    result=$1 code=$2 status=$3 stop_requested=$4
+    if [ -z "$result" ] || [ -z "$code" ] || [ -z "$status" ]; then
+        echo "failed:unit-state-unavailable"
+        return
+    fi
     if [ "$result" = "oom-kill" ]; then
         echo "failed:oom"
         return
     fi
-    if [ "$deadline" -gt 0 ] && [ "$elapsed" -ge "$deadline" ]; then
+    if [ "$stop_requested" -eq 1 ]; then
+        case "$result" in
+            timeout) echo "stopped:timeout" ;;
+            exit-code) echo "failed:exit:$status" ;;
+            *) echo "stopped" ;;
+        esac
+        return
+    fi
+    if [ "$result" = "timeout" ]; then
         echo "failed:timeout"
         return
     fi
-    if [ "$stop_requested" -eq 1 ]; then
-        echo "stopped"
-        return
-    fi
-    if [ "$result" = "success" ] && [ "$code" = "exited" ] && [ "$status" = "0" ]; then
+    if [ "$result" = "success" ] && [ "$status" = "0" ] && { [ "$code" = "0" ] || [ "$code" = "1" ]; }; then
         echo "finished"
         return
     fi
-    if [ "$code" = "killed" ]; then
+    if [ "$code" = "2" ] || [ "$code" = "3" ]; then
         echo "failed:signal:$status"
         return
     fi

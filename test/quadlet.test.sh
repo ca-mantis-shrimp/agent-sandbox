@@ -48,6 +48,7 @@ assert_line "Secret=claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN"
 assert_line "Exec=/agents/loop sandbox-quadlet-lifecycle"
 assert_line "Restart=no"
 assert_line "MemoryMax=16G"
+assert_line "MemorySwapMax=0"
 assert_line "CPUQuota=800%"
 assert_line "TasksMax=4096"
 assert_line "RuntimeMaxSec=21600"
@@ -64,23 +65,24 @@ true
 
 # --- classify_agent_outcome -------------------------------------------------
 
-# OOM wins even if the run also happens to be past its deadline.
-[ "$(classify_agent_outcome oom-kill exited 0 99999 100 0)" = "failed:oom" ]
+# OOM is authoritative even if a stop was also requested.
+[ "$(classify_agent_outcome oom-kill 2 9 0)" = "failed:oom" ]
+[ "$(classify_agent_outcome oom-kill 2 9 1)" = "failed:oom" ]
 
-# A deadline hit is judged by elapsed wall time, not by Result: the process
-# can still report Result=success (it exited cleanly on SIGTERM) even though
-# systemd only sent that SIGTERM because RuntimeMaxSec expired.
-[ "$(classify_agent_outcome success exited 0 21600 21600 0)" = "failed:timeout" ]
-[ "$(classify_agent_outcome success exited 0 21601 21600 0)" = "failed:timeout" ]
-[ "$(classify_agent_outcome success exited 0 21599 21600 0)" = "finished" ]
+# RuntimeMaxSec really reports Result=timeout on this host; start --wait
+# duration includes startup and must not determine the outcome.
+[ "$(classify_agent_outcome timeout 2 9 0)" = "failed:timeout" ]
+[ "$(classify_agent_outcome timeout 2 9 1)" = "stopped:timeout" ]
 
-# scripts/agent-stop's marker overrides an otherwise-ambiguous signal/exit
-# result, but never overrides oom or a deadline hit.
-[ "$(classify_agent_outcome signal killed 15 10 21600 1)" = "stopped" ]
-[ "$(classify_agent_outcome oom-kill killed 9 10 21600 1)" = "failed:oom" ]
-
-[ "$(classify_agent_outcome success exited 0 10 21600 0)" = "finished" ]
-[ "$(classify_agent_outcome signal killed 15 10 21600 0)" = "failed:signal:15" ]
-[ "$(classify_agent_outcome exit-code exited 1 10 21600 0)" = "failed:exit:1" ]
+# systemctl show uses numeric wait(2) codes; a short successful unit may
+# already have cleared ExecMainCode to 0 by the time --wait returns.
+[ "$(classify_agent_outcome success 1 0 0)" = "finished" ]
+[ "$(classify_agent_outcome success 0 0 0)" = "finished" ]
+[ "$(classify_agent_outcome signal 2 15 0)" = "failed:signal:15" ]
+[ "$(classify_agent_outcome signal 2 15 1)" = "stopped" ]
+[ "$(classify_agent_outcome exit-code 1 1 0)" = "failed:exit:1" ]
+[ "$(classify_agent_outcome exit-code 1 1 1)" = "failed:exit:1" ]
+[ "$(classify_agent_outcome '' '' '' 0)" = "failed:unit-state-unavailable" ]
+[ "$(classify_agent_outcome '' '' '' 1)" = "failed:unit-state-unavailable" ]
 
 printf 'agent-quadlet tests passed\n'

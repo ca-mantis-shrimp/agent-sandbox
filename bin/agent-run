@@ -59,6 +59,18 @@ jq -n --arg id "$id" --arg base "$(git -C "$root" rev-parse HEAD)" \
     '{id: $id, base: $base, branch: "agent/\($id)", action: $action, harness: $harness, state: "preparing", started: $started}' \
     >"$run/manifest.json"
 
+# Keep a terminal record if any preparation step fails under `set -e`.
+preparing=1
+on_exit() {
+    code=$?
+    if [ "$preparing" -eq 1 ] && [ "$code" -ne 0 ]; then
+        manifest --argjson code "$code" --arg finished "$(date -Iseconds)" \
+            '.state = "failed" | .outcome = "failed:preparation" | .exit = $code | .finished = $finished' || true
+        echo "agent-run > preparation failed (exit $code); see $run" >&2
+    fi
+}
+trap on_exit EXIT
+
 echo "agent-run > cloning platform into $run/work"
 git clone -q "$root" "$run/work"
 cd "$run/work"
@@ -87,9 +99,26 @@ jq '.packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-mem
     "$pi_host/settings.json" >"$run/pi-settings.json"
 
 echo "agent-run > building image"
-podman build -q -t "$image" "$root" >/dev/null
+build_status=0
+podman build -q -t "$image" "$root" >"$run/build.log" 2>&1 || build_status=$?
+if [ "$build_status" -ne 0 ]; then
+    manifest --argjson code "$build_status" --arg finished "$(date -Iseconds)" \
+        '.state = "failed" | .outcome = "failed:build" | .exit = $code | .finished = $finished'
+    echo "agent-run > image build failed (exit $build_status); see $run/build.log" >&2
+    tail -n 20 "$run/build.log" >&2
+    preparing=0
+    exit "$build_status"
+fi
 
 target=${1:-}
+entrypoint=/agents/loop
+if [ -n "$target" ]; then
+    # Exec= is parsed by Quadlet, not a shell: preserve arbitrary action
+    # selectors (including spaces and shell syntax) as one argument via a
+    # file in the already-mounted run directory.
+    printf '%s' "$target" >"$run/action-target"
+    entrypoint='/agents/loop --target-file /job/action-target'
+fi
 volumes="Volume=$run:/job
 Volume=$run/agents:/agents:ro
 Volume=agent-cargo:/home/agent/.cargo/registry
@@ -103,7 +132,10 @@ Volume=$pi_host/agents:/home/agent/.pi/agent/agents:ro"
 # emit a line for a variable that is actually set here.
 env_line() { # <name>
     val=$(eval "printf '%s' \"\${$1:-}\"")
-    [ -n "$val" ] && printf 'Environment=%s=%s\n' "$1" "$val"
+    if [ -n "$val" ]; then
+        printf 'Environment=%s=%s\n' "$1" "$val"
+    fi
+    return 0
 }
 environment=$(
     printf 'Environment=AGENT_HARNESS=%s\n' "$harness"
@@ -119,16 +151,15 @@ secret=""
 unit=$(quadlet_unit "$id")
 unit_dir=$(quadlet_dir)
 mkdir -p "$unit_dir"
-render_agent_unit "$id" "$image" "/agents/loop ${target:+"$target"}" \
+render_agent_unit "$id" "$image" "$entrypoint" \
     "$volumes" "$environment" "$secret" "$((cpus * 100))" "$deadline" "$stop_grace" \
     >"$unit_dir/$unit.container"
 systemctl --user daemon-reload
 
 manifest '.state = "running"'
+preparing=0
 echo "agent-run > running $id as $unit.service (logs: $run/transcripts/, journalctl --user -u $unit.service)"
-started=$(date +%s)
 systemctl --user start --wait "$unit.service" || true
-elapsed=$(($(date +%s) - started))
 
 props=$(agent_unit_props "$id" 2>/dev/null) || true
 result=$(printf '%s\n' "$props" | sed -n 's/^Result=//p')
@@ -137,10 +168,10 @@ mstatus=$(printf '%s\n' "$props" | sed -n 's/^ExecMainStatus=//p')
 stop_requested=0
 [ -f "$run/.stop-requested" ] && stop_requested=1
 
-outcome=$(classify_agent_outcome "$result" "$code" "$mstatus" "$elapsed" "$deadline" "$stop_requested")
+outcome=$(classify_agent_outcome "$result" "$code" "$mstatus" "$stop_requested")
 case "$outcome" in
     finished) state=finished ;;
-    stopped) state=stopped ;;
+    stopped*) state=stopped ;;
     *) state=failed ;;
 esac
 
