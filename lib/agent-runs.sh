@@ -63,10 +63,17 @@ workspace_json() { # <workspace-dir>
     for f in "$dir"/sessions/*.json; do
         [ -f "$f" ] && set -- "$@" "$f"
     done
-    workspace=$(jq -s '.[0] as $m
+    reviews=$(
+        set --
+        for f in "$dir"/reviews/*.json; do
+            [ ! -f "$f" ] || set -- "$@" "$f"
+        done
+        if [ "$#" -eq 0 ]; then printf '[]\n'; else jq -s '.' "$@"; fi
+    )
+    workspace=$(jq -s --argjson reviews "$reviews" '.[0] as $m
         | (($m.sessions // []) + (.[1:] | sort_by(.n))) as $sessions
         | [$sessions[] | .state // empty] as $states
-        | $m + {sessions: $sessions,
+        | $m + {sessions: $sessions, reviews: (($m.reviews // []) + $reviews),
                 state: (if ($states | any(. == "running")) then "running"
                         elif ($states | length) > 0 then $states[-1]
                         else $m.state end)}' "$@")
@@ -76,10 +83,11 @@ workspace_json() { # <workspace-dir>
 }
 
 # Advisory after a successful landing. Accept the already-loaded workspace;
-# review reports may live in session files or in older inline records.
+# review reports may live in session files, external files or older inline records.
 human_verdict_reminder() { # <workspace-id> <workspace-json>
-    printf '%s\n' "$2" | jq -r --arg ws "$1" '
-        select(.human_verdict == null and any(.sessions[]?; .review != null))
+    printf '%s\n' "$2" | jq -r -L "$root/scripts/lib" --arg ws "$1" '
+        include "agent-review";
+        select(.human_verdict == null and ([workspace_reviews] | length > 0))
         | "agent-land > review has no human verdict; record the human’s call with scripts/agent-verdict \($ws)"' >&2
 }
 

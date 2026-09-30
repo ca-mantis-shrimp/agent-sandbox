@@ -17,6 +17,17 @@ def review_report:
    | try (fromjson | if valid_review_report then . else {unparsed: true} end)
      catch {unparsed: true}] | last;
 
+# Both session reviews and attributed external reports, including legacy manifests.
+def workspace_reviews:
+  (.sessions[]? | select(.review != null)
+   | {source: "session \(.n)", reviewer: (.model // ""), review: .review}),
+  (.reviews[]? | . + {source: "external review \(.id) by \(.reviewer)"});
+
+def blocking_review_lines:
+  workspace_reviews as $r | $r.review.findings[]?
+  | select(.severity == "blocking" and .reconciled != true)
+  | "agent-land > unreconciled blocking finding (\($r.source)): \(.file):\(.line): \(.what) — \(.why)";
+
 # Plain lines for the human-facing harvest summary, before the full closing.
 def review_lines:
   if . == null then "review: no report"

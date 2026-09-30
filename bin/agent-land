@@ -175,9 +175,8 @@ cleanup() {
 workspace='{}'
 if [ -f "$run/manifest.json" ]; then
     workspace=$(workspace_json "$run")
-    printf '%s\n' "$workspace" | jq -r '.sessions[]? as $s | $s.review.findings[]?
-        | select(.severity == "blocking" and .reconciled != true)
-        | "agent-land > unreconciled blocking finding (session \($s.n)): \(.file):\(.line): \(.what) — \(.why)"' >&2
+    printf '%s\n' "$workspace" | jq -r -L "$root/scripts/lib" '
+        include "agent-review"; blocking_review_lines' >&2
 fi
 build_candidate
 fetch_branch

@@ -90,34 +90,44 @@ sh "$fix" ws/2 >"$tmp/out" || status=$?
 [ "$status" -eq 7 ]
 [ "$(cat "$tmp/out")" = ws/12 ]
 unset LAUNCH_STATUS
-# File reviews replace session selection, even an explicitly unparsed session.
+# File reviews are attributed and retained separately from session records.
 printf '%s\n' "$report" >"$tmp/review.json"
-(cd "$tmp"; sh "$fix" ws/11 --review review.json --nits --note note.txt >/dev/null)
+(cd "$tmp"; sh "$fix" ws --review review.json --reviewer claude-opus-5-5 --nits --note note.txt >/dev/null)
 prompt=$(jq -r '.[3]' "$CAPTURE")
-printf '%s\n' "$prompt" | grep -qF 'Target: review file review.json in workspace ws.'
+printf '%s\n' "$prompt" | grep -qF 'in workspace ws (reviewer: claude-opus-5-5).'
+. "$root/scripts/lib/agent-runs.sh"
+workspace_json "$AGENT_RUNS/ws" | jq -e --argjson report "$report" '
+    .reviews | length == 1 and .[0].review == $report and .[0].reviewer == "claude-opus-5-5"' >/dev/null
+refuse ws/11 --review "$tmp/review.json" --reviewer claude-opus-5-5
+refuse ws --review "$tmp/review.json"
+refuse ws --review "$tmp/review.json" --reviewer ''
+refuse ws --reviewer claude-opus-5-5
 printf '%s\n' "$prompt" | grep -qF 'Answer: use existing helper.'
 findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n```").body | fromjson')
 [ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c .findings)" ]
 # Invalid, missing, empty and multi-document files never launch, even with a note.
-refuse ws --review "$tmp/missing.json"
+refuse ws --review "$tmp/missing.json" --reviewer tester
 : >"$tmp/empty.json"
-refuse ws --review "$tmp/empty.json" --note 'Cannot supply the missing review.'
+refuse ws --review "$tmp/empty.json" --reviewer tester --note 'Cannot supply the missing review.'
 printf '{broken\n' >"$tmp/invalid.json"
-refuse ws --review "$tmp/invalid.json"
+refuse ws --review "$tmp/invalid.json" --reviewer tester
 printf '{"verdict":"land","findings":[]}\n' >"$tmp/invalid.json"
-refuse ws --review "$tmp/invalid.json"
+refuse ws --review "$tmp/invalid.json" --reviewer tester
 printf '%s\n%s\n' "$report" "$report" >"$tmp/multiple.json"
-refuse ws --review "$tmp/multiple.json"
+refuse ws --review "$tmp/multiple.json" --reviewer tester
 printf '%s\n' "$nit_report" >"$tmp/nits.json"
-refuse ws --review "$tmp/nits.json" --nits
-sh "$fix" ws --review "$tmp/nits.json" --nits --note 'Fix the style nit.' >/dev/null
+refuse ws --review "$tmp/nits.json" --reviewer tester --nits
+sh "$fix" ws --review "$tmp/nits.json" --reviewer tester --nits --note 'Fix the style nit.' >/dev/null
 jq -e '.[3] | contains("style") and contains("Fix the style nit.")' "$CAPTURE" >/dev/null
 # No parsed review at all: reject before the launcher, even with a note.
 rm "$AGENT_RUNS/ws/sessions/"*.json
 record 1 true '{"unparsed":true}'
 refuse ws --note 'Cannot supply the missing review.'
 # A workspace without review sessions can still use an orchestrator's file.
-sh "$fix" ws --review "$tmp/review.json" >/dev/null
+sh "$fix" ws --review "$tmp/review.json" --reviewer another-reviewer >/dev/null
 jq -e '.[3] | contains("Review verdict: land after fixes") and (contains("style") | not)' "$CAPTURE" >/dev/null
-refuse unknown --review "$tmp/review.json"
+refuse unknown --review "$tmp/review.json" --reviewer tester
+workspace_json "$AGENT_RUNS/ws" | jq -e '.reviews | length == 3 and
+    (map(.reviewer) | sort) == ["another-reviewer","claude-opus-5-5","tester"]' >/dev/null
+[ "$(find "$AGENT_RUNS/ws/reviews" -type f ! -name '*.json' | wc -l)" -eq 0 ]
 printf 'agent-fix tests passed\n'

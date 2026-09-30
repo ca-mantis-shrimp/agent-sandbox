@@ -53,10 +53,12 @@ git -C "$root" config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
 # Each session, in order: who worked, how it ended, what it said. (Manifests
 # from before sessions had their own records call the closing message "why".)
 workspace_json "$run" | jq -r -L "$root/scripts/lib" 'include "agent-review";
-    .sessions[]? |
+    (.sessions[]? |
     "\nagent-harvest > \(.n // "") \(.model // "") \(.label // .action // "") \(if .action then .outcome elif .ok then "ok" else "not-ok" end) ($\(.cost_usd // 0))",
     (if .read_only then .review | review_lines else empty end),
-    (.closing // .why // "")'
+    (.closing // .why // "")),
+    (.reviews[]? | "\nagent-harvest > external review \(.id) by \(.reviewer)",
+     (.review | review_lines))'
 jq --arg at "$(date -Iseconds)" '.harvested = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
     mv "$run/manifest.tmp" "$run/manifest.json"
 printf '\nagent-harvest > review the branches, then land them with: scripts/agent-land %s\n' "$id"

@@ -1,20 +1,21 @@
 #!/bin/sh
 # Start a writer from a review in an existing workspace, without ClearHead.
 # Usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi]
-#        [--model id] [--review <file>] [--note <file|text>] [--nits] [--wait]
+#        [--model id] [--review <file> --reviewer <name>] [--note <file|text>] [--nits] [--wait]
 # Without n, use the latest read-only session with a parsed review. Findings
 # remain unreconciled: only the human can reconcile them after a fix.
 # Prints agent-run's session reference and returns its exit status.
 set -eu
 say() { echo "agent-fix > $*" >&2; }
-ref=${1:?usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi] [--model id] [--review <file>] [--note <file|text>] [--nits] [--wait]}
+ref=${1:?usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi] [--model id] [--review <file> --reviewer <name>] [--note <file|text>] [--nits] [--wait]}
 shift
-harness="" model="" review_file="" note="" nits=false wait=0
+harness="" model="" review_file="" reviewer="" note="" nits=false wait=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --harness) harness=${2:?--harness needs claude or pi}; shift 2 ;;
         --model) model=${2:?--model needs a model id}; shift 2 ;;
         --review) review_file=${2:?--review needs a file}; shift 2 ;;
+        --reviewer) reviewer=${2:?--reviewer needs a name}; shift 2 ;;
         --note) note=${2:?--note needs a file or text}; shift 2 ;;
         --nits) nits=true; shift ;;
         --wait) wait=1; shift ;;
@@ -33,30 +34,44 @@ esac
 run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
 if [ -n "$review_file" ]; then
+    [ -z "$n" ] || { say "--review cannot be combined with a session reference"; exit 2; }
+    [ -n "$reviewer" ] || { say "--review requires --reviewer <name>"; exit 2; }
     review=$(jq -c -s -L "$root/scripts/lib" '
         include "agent-review";
         if length == 1 and (.[0] | valid_review_report) then .[0]
         else error("expected one valid review report") end' "$review_file") ||
         { say "invalid review file: $review_file"; exit 1; }
-    target="review file $review_file in workspace $ws"
 else
-# The shared reader preserves stored reports and parses older closing records.
-record=$(workspace_json "$run" | jq -c -L "$root/scripts/lib" --arg n "$n" '
-    include "agent-review";
-    [.sessions[] | select(.read_only == true)
-     | select(if $n == "" then (.review | valid_review_report) else (.n | tostring) == $n end)]
-    | sort_by(.n) | last')
-[ "$record" != null ] || { say "no read-only session with a parsed review for $ref"; exit 1; }
-printf '%s\n' "$record" | jq -e -L "$root/scripts/lib" 'include "agent-review"; .review | valid_review_report' >/dev/null ||
-    { say "session $ref has no review or its review is unparsed"; exit 1; }
-review=$(printf '%s\n' "$record" | jq -c .review)
-target="review session $ws/$(printf '%s\n' "$record" | jq -r .n)"
+    [ -z "$reviewer" ] || { say "--reviewer requires --review"; exit 2; }
+    # The shared reader preserves stored reports and parses older closing records.
+    record=$(workspace_json "$run" | jq -c -L "$root/scripts/lib" --arg n "$n" '
+        include "agent-review";
+        [.sessions[] | select(.read_only == true)
+         | select(if $n == "" then (.review | valid_review_report) else (.n | tostring) == $n end)]
+        | sort_by(.n) | last')
+    [ "$record" != null ] || { say "no read-only session with a parsed review for $ref"; exit 1; }
+    printf '%s\n' "$record" | jq -e -L "$root/scripts/lib" 'include "agent-review"; .review | valid_review_report' >/dev/null ||
+        { say "session $ref has no review or its review is unparsed"; exit 1; }
+    review=$(printf '%s\n' "$record" | jq -c .review)
+    target="review session $ws/$(printf '%s\n' "$record" | jq -r .n)"
 fi
 if [ -f "$note" ]; then note=$(cat "$note"); fi
 # Nits alone never authorize a fix; a note can authorize a nit-only session.
 printf '%s\n' "$review" | jq -e --arg note "$note" '
     ($note | length) > 0 or any(.findings[]; .severity == "blocking" or .severity == "should-fix")' >/dev/null ||
     { say "no blocking or should-fix finding and no note for $ref"; exit 1; }
+if [ -n "$review_file" ]; then
+    mkdir -p "$run/reviews"
+    stored=$(mktemp "$run/reviews/review.XXXXXX")
+    trap 'rm -f "$stored"' EXIT
+    id=${stored##*/}
+    jq -n --arg id "$id" --arg reviewer "$reviewer" --arg file "$review_file" \
+        --arg at "$(date -Iseconds)" --argjson review "$review" \
+        '{id:$id, reviewer:$reviewer, file:$file, at:$at, review:$review}' >"$stored"
+    mv "$stored" "$stored.json"
+    trap - EXIT
+    target="review file reviews/$id.json in workspace $ws (reviewer: $reviewer)"
+fi
 prompt=$(printf '%s\n' "$review" | jq -r --arg target "$target" --arg note "$note" --argjson nits "$nits" '
     "Run kind: fix. Target: \($target).\n\n" +
     "Review verdict: \(.verdict)\n\nFindings (verbatim JSON objects):\n```json\n" +

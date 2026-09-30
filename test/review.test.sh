@@ -40,4 +40,39 @@ coverage: behavior — git diff' ]
 [ "$(printf '%s' "$report" | jq -r -L "$root/scripts/lib" 'include "agent-review"; .findings[0] |= (.file=null | .line=null) | review_lines' | grep '^blocking')" = 'blocking (approach):-: bug' ]
 [ "$(jq -nr -L "$root/scripts/lib" 'include "agent-review"; {unparsed:true} | review_lines')" = 'review: unparsed report' ]
 [ "$(jq -nr -L "$root/scripts/lib" 'include "agent-review"; null | review_lines')" = 'review: no report' ]
+# External reports survive rereads with attribution and human reconciliation.
+mkdir "$tmp/reviews"
+jq -n --argjson report "$report" '{id:"one",reviewer:"claude-opus-5-5",review:$report}' >"$tmp/reviews/one.json"
+workspace=$(workspace_json "$tmp")
+printf '%s\n' "$workspace" | jq -e '.reviews[0].reviewer == "claude-opus-5-5" and
+    .sessions[0].review.findings[0].reconciled == true' >/dev/null
+lines=$(printf '%s\n' "$workspace" | jq -r -L "$root/scripts/lib" 'include "agent-review"; blocking_review_lines')
+[ "$lines" = 'agent-land > unreconciled blocking finding (external review one by claude-opus-5-5): a:1: bug — breaks' ]
+jq '.review.findings[0].reconciled=true' "$tmp/reviews/one.json" >"$tmp/reconciled"
+mv "$tmp/reconciled" "$tmp/reviews/one.json"
+[ -z "$(workspace_json "$tmp" | jq -r -L "$root/scripts/lib" 'include "agent-review"; blocking_review_lines')" ]
+# The actual harvest command prints external reviews even without sessions.
+mkdir -p "$tmp/tool/scripts/lib" "$tmp/runs/ws/work" "$tmp/runs/ws/reviews"
+cp "$root/scripts/agent-harvest" "$tmp/tool/scripts/"
+cp "$root/scripts/lib/agent-runs.sh" "$root/scripts/lib/agent-review.jq" "$root/scripts/lib/agent-quadlet.sh" "$tmp/tool/scripts/lib/"
+printf '#!/bin/sh\nexit 0\n' >"$tmp/tool/scripts/agent-reconcile"
+chmod +x "$tmp/tool/scripts/agent-reconcile"
+git -C "$tmp/tool" init -q
+work="$tmp/runs/ws/work"
+git -C "$work" init -q
+git -C "$work" -c user.name=test -c user.email=test@localhost commit -q --allow-empty -m base
+git -C "$work" branch agent/ws
+git -C "$work" update-ref refs/agent/base HEAD
+printf '{"state":"ready"}\n' >"$tmp/runs/ws/manifest.json"
+cp "$tmp/reviews/one.json" "$tmp/runs/ws/reviews/one.json"
+AGENT_RUNS="$tmp/runs" sh "$tmp/tool/scripts/agent-harvest" ws >"$tmp/harvest"
+grep -qF 'external review one by claude-opus-5-5' "$tmp/harvest"
+grep -qF 'blocking a:1: bug' "$tmp/harvest"
+# An external-only review also triggers the human verdict reminder.
+human_verdict_reminder ws "$(workspace_json "$tmp/runs/ws")" 2>"$tmp/reminder"
+grep -qF 'scripts/agent-verdict ws' "$tmp/reminder"
+jq '.human_verdict={agrees_with_review:true}' "$tmp/runs/ws/manifest.json" >"$tmp/verdict"
+mv "$tmp/verdict" "$tmp/runs/ws/manifest.json"
+human_verdict_reminder ws "$(workspace_json "$tmp/runs/ws")" 2>"$tmp/reminder"
+[ ! -s "$tmp/reminder" ]
 printf 'agent-review tests passed\n'
