@@ -53,19 +53,8 @@ on_exit() {
 trap on_exit EXIT
 
 say "cloning $(basename "$root") into $run/work"
-git clone -q "$root" "$run/work"
+clone_local "$root" "$run/work"
 cd "$run/work"
-# .gitmodules points at GitHub; clone each submodule from the local checkout
-# instead, so unpushed local commits are available too.
-git submodule -q init
-git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
-    while read -r key path; do
-        name=${key#submodule.}
-        name=${name%.path}
-        git config "submodule.$name.url" "$root/$path"
-    done
-# Git refuses local-path submodule clones by default; these are our own repos.
-git -c protocol.file.allow=always submodule -q update --recursive
 # refs/agent/base marks where each repo started, so harvest counts exactly the
 # workspace's commits.
 git switch -q -c "$branch" && git update-ref refs/agent/base HEAD

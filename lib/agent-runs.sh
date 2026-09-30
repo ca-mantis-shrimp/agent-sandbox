@@ -1,6 +1,6 @@
 # Shared by the scripts/agent-* tools: where workspaces live and how their
-# records are read. Pure functions, except repo_commits (git) — so
-# scripts/agent-runs.test.sh can source this and check it on its own.
+# records are read. Pure functions, except repo_commits and clone_local (git) —
+# so scripts/agent-runs.test.sh can source this and check it on its own.
 #
 # Three separate things, combined by whoever calls the tools:
 #
@@ -62,6 +62,25 @@ workspace_json() { # <workspace-dir>
                 state: (if ($states | any(. == "running")) then "running"
                         elif ($states | length) > 0 then $states[-1]
                         else $m.state end)}' "$@"
+}
+
+# Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
+# come from <repo>'s own checkouts, not the remotes in .gitmodules, so unpushed
+# local commits are available too.
+clone_local() { # <repo> <dest>
+    git clone -q "$1" "$2"
+    (
+        cd "$2"
+        git submodule -q init
+        git config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+            while read -r key path; do
+                name=${key#submodule.}
+                name=${name%.path}
+                git config "submodule.$name.url" "$1/$path"
+            done
+        # Git refuses local-path submodule clones by default; these are our own repos.
+        git -c protocol.file.allow=always submodule -q update --recursive
+    )
 }
 
 # Each repo's commits since <from-ref>, as {"<path>": [sha, ...]}, keyed by the
