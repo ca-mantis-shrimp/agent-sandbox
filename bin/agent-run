@@ -116,10 +116,12 @@ printf '%s\n' "$prompt_text" >"$run/prompts/$n.md"
     git update-ref "refs/agent/session-$n" HEAD
     git submodule -q foreach --recursive "git update-ref refs/agent/session-$n HEAD"
 )
-jq -n --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model "$model" \
+changed=null
+[ "$readonly" = true ] && changed=$(changed_files "$run/work" "refs/agent/base")
+jq -n --argjson changed "$changed" --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model "$model" \
     --argjson ro "$readonly" --arg started "$(date -Iseconds)" \
     '{n: $n, label: $label, harness: $harness, model: $model, read_only: $ro,
-      prompt: "prompts/\($n).md", state: "running", started: $started}' \
+      prompt: "prompts/\($n).md", state: "running", started: $started, changed_files: $changed}' \
     >"$run/sessions/$n.json"
 
 volumes="Volume=$run:/job

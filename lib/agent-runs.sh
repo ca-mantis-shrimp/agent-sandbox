@@ -15,6 +15,49 @@
 # starts and when it finalizes the session, the session itself for its result.
 # One file per session means sessions in a workspace never contend for a file.
 
+# Changed paths include deleted files and submodule pins in the denominator.
+changed_files() { # <work-dir> <ref>
+    (
+        cd "$1"
+        scratch=$(mktemp -d)
+        trap 'rm -rf "$scratch"' EXIT
+        echo . >"$scratch/repos"
+        git submodule --quiet foreach --recursive 'echo "$displaypath"' >>"$scratch/repos" || exit 1
+        : >"$scratch/files"
+        while IFS= read -r repo; do
+            git -C "$repo" diff --no-renames --name-only -z "$2" HEAD >"$scratch/paths" || exit 1
+            jq -Rs --arg repo "$repo" 'split("\u0000") | .[] | select(length > 0)
+                | if $repo == "." then . else $repo + "/" + . end' \
+                <"$scratch/paths" >>"$scratch/files" || exit 1
+        done <"$scratch/repos"
+        jq -s 'unique' "$scratch/files"
+    )
+}
+
+session_json() { # <workspace-dir> <record-json>; read-only enrichment
+    review_dir=$1
+    review_record=$2
+    # Finalization persists evidence once; later readers (and landing after the
+    # clone is removed) use that snapshot, including human reconciliation.
+    if printf '%s\n' "$review_record" | jq -e 'has("opened_in_full") or (.read_only != true)' >/dev/null; then
+        printf '%s\n' "$review_record"
+        return
+    fi
+    report=$(printf '%s\n' "$review_record" | jq -L "$root/scripts/lib" 'include "agent-review"; review_report')
+    metric=null
+    transcript=$(printf '%s\n' "$review_record" | jq -r '.transcript // empty')
+    changed=$(printf '%s\n' "$review_record" | jq -c '.changed_files // null')
+    case "$transcript" in
+        transcripts/*.jsonl)
+            if [ "$changed" != null ] && [ -f "$review_dir/$transcript" ]; then
+                metric=$(jq -s -L "$root/scripts/lib" --argjson changed "$changed" \
+                    'include "agent-review"; opened_in_full($changed)' "$review_dir/$transcript" 2>/dev/null) || metric=null
+            fi ;;
+    esac
+    printf '%s\n' "$review_record" | jq --argjson report "$report" --argjson metric "$metric" '
+        if .read_only then . + {review: (.review // $report), opened_in_full: $metric} else . end'
+}
+
 runs_dir() {
     printf '%s\n' "${AGENT_RUNS:-$HOME/agent-runs}"
 }
@@ -55,13 +98,16 @@ workspace_json() { # <workspace-dir>
     for f in "$dir"/sessions/*.json; do
         [ -f "$f" ] && set -- "$@" "$f"
     done
-    jq -s '.[0] as $m
+    workspace=$(jq -s '.[0] as $m
         | (($m.sessions // []) + (.[1:] | sort_by(.n))) as $sessions
         | [$sessions[] | .state // empty] as $states
         | $m + {sessions: $sessions,
                 state: (if ($states | any(. == "running")) then "running"
                         elif ($states | length) > 0 then $states[-1]
-                        else $m.state end)}' "$@"
+                        else $m.state end)}' "$@")
+    printf '%s\n' "$workspace" | jq -c '.sessions[]?' | while IFS= read -r session; do
+        session_json "$dir" "$session"
+    done | jq -s --argjson workspace "$workspace" '$workspace + {sessions: .}'
 }
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
