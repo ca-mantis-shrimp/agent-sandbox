@@ -24,9 +24,10 @@ if [ "${1:-}" = --target-file ]; then
 fi
 
 cd /job/work
-echo "loop > building clearhead from this branch"
-cargo build -q --manifest-path clearhead-core/Cargo.toml -p clearhead_cli
-export PATH="$CARGO_TARGET_DIR/debug:$PATH"
+# The queue and outcome below need this branch's clearhead, which the repo's
+# own setup provides (each session sources it again; the build is cached).
+. ./.sandbox/setup >>/job/setup.log 2>&1
+cd /job/work
 
 max=${AGENT_MAX_ACTIONS:-10}
 run_usd=${AGENT_RUN_USD:-15}

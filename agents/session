@@ -8,7 +8,14 @@
 # Works in /job/work, writes the transcript to /job/transcripts/<n>-<label>.jsonl
 # and appends one entry to /job/manifest.json .sessions:
 #
-#   {label, ok, cost_usd, closing, stop_reason, transcript}
+#   {label, ok, cost_usd, closing, stop_reason, transcript, setup_sec}
+#
+# The repo being worked on may carry its own startup pieces in .sandbox/, both
+# optional, read from the clone (so they are what the branch says they are):
+#   .sandbox/setup      sourced before the session, so it can export (PATH, ...);
+#                       output goes to /job/setup.log, and a failure fails the run
+#   .sandbox/prompt.md  prose placed ahead of every prompt: the repo's standing
+#                       rules for agents working in the sandbox
 #
 # ok means the harness ended its turn normally and left a closing message; what
 # that message means is the caller's business. Exits 0 when ok, 1 otherwise.
@@ -26,6 +33,17 @@ mkdir -p /job/transcripts
 n=$(($(jq '.sessions // [] | length' /job/manifest.json) + 1))
 log="/job/transcripts/$n-$label.jsonl"
 cd /job/work
+setup_started=$(date +%s)
+if [ -f .sandbox/setup ]; then
+    echo "session > .sandbox/setup"
+    . ./.sandbox/setup >>/job/setup.log 2>&1
+    cd /job/work
+fi
+setup_sec=$(($(date +%s) - setup_started))
+if [ -f .sandbox/prompt.md ]; then
+    { cat .sandbox/prompt.md; echo; cat "$prompt"; } >/tmp/session-prompt.md
+    prompt=/tmp/session-prompt.md
+fi
 
 # Headless sessions end when the agent replies; nothing resumes them.
 blocked_tools="ScheduleWakeup CronCreate Monitor RemoteTrigger"
@@ -79,10 +97,10 @@ else
            closing: ($r.result // ""), stop: ($r.stop_reason // $r.subtype // null)}' "$log")
 fi
 
-jq --arg label "$label" --arg log "${log#/job/}" --argjson r "$result" \
+jq --arg label "$label" --arg log "${log#/job/}" --argjson r "$result" --argjson setup "$setup_sec" \
     '.sessions += [{label: $label, ok: $r.ok, cost_usd: $r.cost,
                     closing: (if $r.closing == "" then "no closing message; inspect the transcript" else $r.closing end),
-                    stop_reason: $r.stop, transcript: $log}]' \
+                    stop_reason: $r.stop, transcript: $log, setup_sec: $setup}]' \
     /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
 jq -r '.sessions[-1] | "session > \(if .ok then "ok" else "not ok" end), $\(.cost_usd)"' /job/manifest.json
 jq -e '.sessions[-1].ok' /job/manifest.json >/dev/null
