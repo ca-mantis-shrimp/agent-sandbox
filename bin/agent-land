@@ -83,12 +83,14 @@ fetch_branch() {
 }
 
 # A workspace's clone may hold commits nobody harvested; landing without them
-# would delete the only copy.
+# would delete the only copy. A repo the workspace left alone has no branch
+# to harvest: its tip is already in HEAD.
 check_harvested() {
     [ -d "$run/work" ] || return 0
     for sm in . $submodules; do
         tip=$(git -C "$run/work/$sm" rev-parse -q --verify "refs/heads/$branch") || continue
         git -C "$root/$sm" merge-base --is-ancestor "$tip" "$branch" 2>/dev/null ||
+            git -C "$root/$sm" merge-base --is-ancestor "$tip" HEAD 2>/dev/null ||
             stop "$(name "$sm"): the workspace has commits on $branch that are not harvested; run scripts/agent-harvest $id"
     done
 }

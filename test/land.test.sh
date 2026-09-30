@@ -95,4 +95,24 @@ fails git -C "$root/sub" rev-parse -q --verify refs/heads/agent/green >/dev/null
 [ ! -d "$AGENT_RUNS/green/candidate" ]
 fails podman image exists fixture-agent:land-green
 
+# --- a workspace clone: unharvested commits refuse, an untouched repo lands ---
+
+# Only the root repo has commits, so harvest fetched nothing from sub and the
+# real sub has no agent/root-only branch.
+work="$AGENT_RUNS/root-only/work"
+(. "$script_dir/lib/agent-runs.sh" && clone_local "$root" "$work")
+git -C "$work" switch -q -c agent/root-only
+git -C "$work/sub" switch -q -c agent/root-only
+commit "$work" note root-only
+git -C "$root" fetch -q "$work" agent/root-only:agent/root-only
+commit "$work/sub" state unharvested
+before_root=$(head_of "$root")
+fails land root-only
+grep -q "not harvested" "$tmp/land.log"
+[ "$(head_of "$root")" = "$before_root" ]
+git -C "$work/sub" reset -q --hard HEAD~1
+land root-only
+[ "$(cat "$root/note")" = root-only ]
+[ ! -d "$work" ]
+
 echo "agent-land.test > ok"
