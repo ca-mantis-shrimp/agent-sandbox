@@ -174,9 +174,14 @@ cleanup() {
 # The human can record reconciliation on the finding in the session record.
 workspace='{}'
 if [ -f "$run/manifest.json" ]; then
-    workspace=$(workspace_json "$run")
-    printf '%s\n' "$workspace" | jq -r -L "$root/scripts/lib" '
-        include "agent-review"; blocking_review_lines' >&2
+    if workspace=$(workspace_json "$run"); then
+        printf '%s\n' "$workspace" | jq -r -L "$root/scripts/lib" '
+            include "agent-review"; blocking_review_lines' >&2 ||
+            say "warning: could not display blocking review findings"
+    else
+        workspace='{}'
+        say "warning: could not load workspace reviews for landing advisories"
+    fi
 fi
 build_candidate
 fetch_branch
@@ -186,4 +191,5 @@ gate_candidate
 advance
 cleanup
 say "landed $branch; push when ready"
-human_verdict_reminder "$id" "$workspace"
+human_verdict_reminder "$id" "$workspace" ||
+    say "warning: could not display the human verdict reminder"

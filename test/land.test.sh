@@ -40,7 +40,7 @@ git init -q -b main "$root"
 git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" sub
 mkdir -p "$root/scripts/lib" "$root/.sandbox"
 cp "$script_dir/agent-land" "$root/scripts/"
-cp "$script_dir/lib/agent-runs.sh" "$root/scripts/lib/"
+cp -R "$script_dir/lib/." "$root/scripts/lib/"
 echo "FROM $base_image" >"$root/Containerfile"
 printf '#!/bin/sh\nexit 0\n' >"$root/.sandbox/gate"
 chmod +x "$root/.sandbox/gate"
@@ -114,5 +114,31 @@ git -C "$work/sub" reset -q --hard HEAD~1
 land root-only
 [ "$(cat "$root/note")" = root-only ]
 [ ! -d "$work" ]
+
+# --- failed review advisories warn without changing a successful landing ------
+
+workspace advisory
+mkdir -p "$AGENT_RUNS/advisory" "$tmp/bin"
+printf '{}\n' >"$AGENT_RUNS/advisory/manifest.json"
+real_jq=$(command -v jq)
+export real_jq
+# Fail only the advisory expressions; workspace loading and manifest updates
+# still use the real jq, as does every non-advisory operation.
+printf '%s\n' '#!/bin/sh' \
+    'for arg do' \
+    '    case "$arg" in' \
+    '        *blocking_review_lines*|*select\(.human_verdict*) exit 1 ;;' \
+    '    esac' \
+    'done' \
+    'exec "$real_jq" "$@"' >"$tmp/bin/jq"
+chmod +x "$tmp/bin/jq"
+PATH="$tmp/bin:$PATH" land advisory
+grep -q 'warning: could not display blocking review findings' "$tmp/land.log"
+grep -q 'warning: could not display the human verdict reminder' "$tmp/land.log"
+[ "$(cat "$root/note")" = advisory ]
+[ "$(cat "$root/sub/state")" = advisory ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
+[ ! -d "$AGENT_RUNS/advisory/candidate" ]
+jq -e '.landed != null and .gate.ok == true' "$AGENT_RUNS/advisory/manifest.json" >/dev/null
 
 echo "agent-land.test > ok"
