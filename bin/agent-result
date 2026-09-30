@@ -1,35 +1,54 @@
 #!/bin/sh
 #
-# Print a run's manifest as JSON: the contract every caller reads, whichever
-# harness it is.
+# Print a workspace or one of its sessions as JSON: the contract every caller
+# reads, whichever harness it is.
 #
-#   scripts/agent-result <id> [--wait]
+#   scripts/agent-result <workspace> [--wait]       the manifest, all sessions
+#                                                   in order, and the commits
+#                                                   the workspace holds
+#   scripts/agent-result <workspace>/<n> [--wait]   that session's record
 #
-# A run whose unit has stopped is finalized first (scripts/agent-reconcile), so
-# the manifest carries its terminal state, outcome, sessions and commits.
-# Without --wait a run that is still going prints its manifest as it stands;
-# with --wait this blocks until the unit stops. Only the manifest goes to
-# stdout. Exit: 0 finished, 1 failed or stopped, 3 still running.
+# Sessions whose unit has stopped are finalized first (scripts/agent-reconcile),
+# so their records carry a terminal state, outcome and commits. Without --wait
+# a session that is still going prints its record as it stands; with --wait
+# this blocks until it (or every session in the workspace) has stopped. Only
+# the JSON goes to stdout. Exit: 0 finished or ready, 1 failed or stopped,
+# 3 still running or preparing.
 set -eu
 
-id=${1:?usage: scripts/agent-result <id> [--wait]}
+ref=${1:?usage: scripts/agent-result <workspace>[/<n>] [--wait]}
 wait=0
 [ "${2:-}" = --wait ] && wait=1
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/scripts/lib/agent-quadlet.sh"
-manifest="${AGENT_RUNS:-$HOME/agent-runs}/$id/manifest.json"
-test -f "$manifest" || { echo "agent-result > no run $id" >&2; exit 1; }
+. "$root/scripts/lib/agent-runs.sh"
+ws=$(ref_workspace "$ref")
+n=$(ref_session "$ref")
+run="$(runs_dir)/$ws"
+test -f "$run/manifest.json" || { echo "agent-result > no workspace $ws" >&2; exit 1; }
+[ -z "$n" ] || test -f "$run/sessions/$n.json" || { echo "agent-result > no session $ws/$n" >&2; exit 1; }
 
+any_active() {
+    for s in ${n:-$(running_sessions "$run")}; do
+        agent_unit_active "$(session_unit_id "$ws" "$s")" && return 0
+    done
+    return 1
+}
 if [ "$wait" -eq 1 ]; then
-    while agent_unit_active "$id"; do sleep 2; done
+    while any_active; do sleep 2; done
 fi
-if [ "$(jq -r .state "$manifest")" = running ] && ! agent_unit_active "$id"; then
-    "$root/scripts/agent-reconcile" "$id" >&2 || true
-fi
+"$root/scripts/agent-reconcile" "$ws" >&2 || true
 
-cat "$manifest"
-case "$(jq -r .state "$manifest")" in
-    finished) exit 0 ;;
+if [ -n "$n" ]; then
+    json=$(cat "$run/sessions/$n.json")
+else
+    commits='{}'
+    [ -d "$run/work" ] && commits=$(repo_commits "$run/work" refs/agent/base)
+    json=$(workspace_json "$run" | jq --argjson commits "$commits" '. + {commits: $commits}')
+fi
+printf '%s\n' "$json"
+case "$(printf '%s' "$json" | jq -r .state)" in
+    finished | ready) exit 0 ;;
     preparing | running) exit 3 ;;
     *) exit 1 ;;
 esac

@@ -1,37 +1,37 @@
 #!/bin/sh
 #
-# Run one harness session on a prompt, inside the run's container, and record
-# it. Knows the harnesses (claude, pi) and nothing about what the prompt asks.
+# Run one session inside its container: the agent named by AGENT_HARNESS and
+# AGENT_MODEL, on the prompt its record points at. Knows the harnesses (claude,
+# pi) and nothing about what the prompt asks.
 #
-#   /agents/session <prompt-file> [label]
+#   /agents/session <n>
 #
-# Works in /job/work, writes the transcript to /job/transcripts/<n>-<label>.jsonl
-# and appends one entry to /job/manifest.json .sessions:
+# Works in /job/work, writes the transcript to /job/transcripts/<n>.jsonl and
+# adds the session's result to its own record, /job/sessions/<n>.json:
 #
-#   {label, ok, cost_usd, closing, stop_reason, transcript, setup_sec}
+#   {ok, cost_usd, closing, stop_reason, transcript, setup_sec}
 #
 # The repo being worked on may carry its own startup pieces in .sandbox/, both
 # optional, read from the clone (so they are what the branch says they are):
 #   .sandbox/setup      sourced before the session, so it can export (PATH, ...);
-#                       output goes to /job/setup.log, and a failure fails the run
+#                       output goes to /job/setup.log, and a failure fails the
+#                       session
 #   .sandbox/prompt.md  prose placed ahead of every prompt: the repo's standing
 #                       rules for agents working in the sandbox
 #
 # ok means the harness ended its turn normally and left a closing message; what
 # that message means is the caller's business. Exits 0 when ok, 1 otherwise.
-#   AGENT_HARNESS       claude (default) or pi
 #   AGENT_SESSION_USD   spend cap for the session (default 3)
 set -eu
 
-. /agents/models.env
-prompt=${1:?usage: session <prompt-file> [label]}
-label=${2:-session}
-harness=${AGENT_HARNESS:-claude}
+n=${1:?usage: session <n>}
+record="/job/sessions/$n.json"
+prompt="/job/$(jq -r .prompt "$record")"
+harness=${AGENT_HARNESS:?}
+model=${AGENT_MODEL:?}
 session_usd=${AGENT_SESSION_USD:-3}
+log="/job/transcripts/$n.jsonl"
 
-mkdir -p /job/transcripts
-n=$(($(jq '.sessions // [] | length' /job/manifest.json) + 1))
-log="/job/transcripts/$n-$label.jsonl"
 cd /job/work
 setup_started=$(date +%s)
 if [ -f .sandbox/setup ]; then
@@ -52,7 +52,7 @@ pi_session() {
     # Pi has no built-in spend cap. Watch its usage events and terminate the
     # session at the threshold. A single in-flight request may overshoot it.
     pi -p --mode json --provider openai-codex \
-        --model "$AGENT_PI_MODEL" \
+        --model "$model" \
         --exclude-tools bg_run,bg_delegate,subagent,ScheduleWakeup \
         "$(cat "$prompt")" >"$log" 2>"$log.stderr" &
     agent_pid=$!
@@ -86,7 +86,7 @@ if [ "$harness" = pi ]; then
            closing: $closing, stop: ($last.stopReason // null)}' "$log")
 else
     claude -p "$(cat "$prompt")" --dangerously-skip-permissions \
-        --model "$AGENT_CLAUDE_MODEL" \
+        --model "$model" \
         --max-budget-usd "$session_usd" \
         --disallowedTools $blocked_tools \
         --output-format stream-json --verbose >"$log" || true
@@ -97,10 +97,10 @@ else
            closing: ($r.result // ""), stop: ($r.stop_reason // $r.subtype // null)}' "$log")
 fi
 
-jq --arg label "$label" --arg log "${log#/job/}" --argjson r "$result" --argjson setup "$setup_sec" \
-    '.sessions += [{label: $label, ok: $r.ok, cost_usd: $r.cost,
-                    closing: (if $r.closing == "" then "no closing message; inspect the transcript" else $r.closing end),
-                    stop_reason: $r.stop, transcript: $log, setup_sec: $setup}]' \
-    /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
-jq -r '.sessions[-1] | "session > \(if .ok then "ok" else "not ok" end), $\(.cost_usd)"' /job/manifest.json
-jq -e '.sessions[-1].ok' /job/manifest.json >/dev/null
+jq --arg log "${log#/job/}" --argjson r "$result" --argjson setup "$setup_sec" \
+    '. + {ok: $r.ok, cost_usd: $r.cost,
+          closing: (if $r.closing == "" then "no closing message; inspect the transcript" else $r.closing end),
+          stop_reason: $r.stop, transcript: $log, setup_sec: $setup}' \
+    "$record" >"/tmp/session-$n.json" && cp "/tmp/session-$n.json" "$record"
+jq -r '"session > \(if .ok then "ok" else "not ok" end), $\(.cost_usd)"' "$record"
+jq -e .ok "$record" >/dev/null

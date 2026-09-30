@@ -22,7 +22,7 @@ export XDG_RUNTIME_DIR
 
 # --- render_agent_unit -----------------------------------------------------
 
-unit=$(render_agent_unit 20260926-000000 clearhead-agent "/agents/loop sandbox-quadlet-lifecycle" \
+unit=$(render_agent_unit 20260926-000000 clearhead-agent "/agents/session 1" \
     "Volume=/run/it:/job
 Volume=/run/it/agents:/agents:ro" \
     "Environment=AGENT_HARNESS=claude" \
@@ -45,7 +45,7 @@ assert_line "Volume=/run/it:/job"
 assert_line "Volume=/run/it/agents:/agents:ro"
 assert_line "Environment=AGENT_HARNESS=claude"
 assert_line "Secret=claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN"
-assert_line "Exec=/agents/loop sandbox-quadlet-lifecycle"
+assert_line "Exec=/agents/session 1"
 assert_line "Restart=no"
 assert_line "MemoryMax=16G"
 assert_line "MemorySwapMax=0"
@@ -57,7 +57,7 @@ assert_line "OOMPolicy=kill"
 
 # A run with no secret (pi) and no extra environment omits both lines, rather
 # than rendering "Secret=" or "Environment=" empty.
-bare=$(render_agent_unit 20260926-000001 clearhead-agent "/agents/loop" \
+bare=$(render_agent_unit 20260926-000001 clearhead-agent "/agents/session 1" \
     "Volume=/run/it:/job" "" "" 800 21600 60)
 printf '%s\n' "$bare" | grep -q '^Secret=' && { echo "agent-quadlet.test: unexpected Secret= line" >&2; exit 1; }
 printf '%s\n' "$bare" | grep -q '^Environment=' && { echo "agent-quadlet.test: unexpected Environment= line" >&2; exit 1; }

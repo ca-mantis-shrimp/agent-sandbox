@@ -1,22 +1,26 @@
 #!/bin/sh
 #
-# On-demand summary of agent runs, read from their manifests, transcripts and
-# each run's systemd --user unit.
+# On-demand summary of agent workspaces, read from their records, transcripts
+# and each session's systemd --user unit.
 #
-#   scripts/agent-status              one line per run
-#   scripts/agent-status <id> [n]     that run's line, then its last n tool calls (default 10)
+#   scripts/agent-status                    one line per workspace
+#   scripts/agent-status <workspace> [n]    its line, then the last n tool
+#                                           calls of its newest session (default 10)
 #
-# idle is seconds since the newest transcript event: the heartbeat, with no hook
-# into the harness. A running unit idle past $AGENT_STUCK_SECS (default
-# 600) is flagged STUCK; a manifest still "running" with no active unit needs
-# `scripts/agent-reconcile <id>` after an interrupted launcher. spent counts
-# finished sessions and shows - while a session runs. This is the bridge until
-# telemetry answers the same questions from the collector.
+# The agent column is the newest session's model; the outcome column lists
+# every session in order. idle is seconds since the newest transcript event:
+# the heartbeat, with no hook into the harness. A session idle past
+# $AGENT_STUCK_SECS (default 600) is flagged STUCK; a session whose record
+# still says running with no active unit is finalized by scripts/agent-result
+# (or the next scripts/agent-run in that workspace). spent counts finished
+# sessions and shows - while one runs. This is the bridge until telemetry
+# answers the same questions from the collector.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$root/scripts/lib/agent-quadlet.sh"
-runs="${AGENT_RUNS:-$HOME/agent-runs}"
+. "$root/scripts/lib/agent-runs.sh"
+runs=$(runs_dir)
 stuck=${AGENT_STUCK_SECS:-600}
 now=$(date +%s)
 
@@ -28,11 +32,11 @@ latest_transcript() { # <run-dir>
     ls -t "$1"/transcripts/*.jsonl 2>/dev/null | head -n 1 || true
 }
 
-row() { # <run-dir>
+row() { # <workspace-dir>
     dir=$1
     id=$(basename "$dir")
-    m="$dir/manifest.json"
-    state=$(jq -r .state "$m")
+    m=$(workspace_json "$dir")
+    state=$(printf '%s' "$m" | jq -r .state)
     latest=$(latest_transcript "$dir")
     events=0
     idle=-
@@ -40,22 +44,34 @@ row() { # <run-dir>
         events=$(cat "$dir"/transcripts/*.jsonl | wc -l)
         idle=$((now - $(stat -c %Y "$latest")))
     fi
-    flag=$(jq -r 'if .landed then "landed" elif .harvested then "harvested" else "" end' "$m")
-    if agent_unit_active "$id"; then
-        [ "$idle" != - ] && [ "$idle" -gt "$stuck" ] && flag=STUCK
-    elif [ "$state" = running ]; then
-        flag=RECONCILE
+    flag=$(printf '%s' "$m" | jq -r 'if .landed then "landed" elif .harvested then "harvested" else "" end')
+    if [ "$state" = running ]; then
+        # The record says a session is running; the unit says whether it is.
+        active=0
+        for n in $(running_sessions "$dir"); do
+            agent_unit_active "$(session_unit_id "$id" "$n")" && active=1
+        done
+        if [ "$active" -eq 0 ]; then
+            flag=RECONCILE
+        elif [ "$idle" != - ] && [ "$idle" -gt "$stuck" ]; then
+            flag=STUCK
+        fi
     elif [ "$state" = preparing ]; then
         flag=ORPHANED
     fi
-    spent=\$$(jq '[.sessions[]?.cost_usd] | add // 0 | . * 100 | round / 100' "$m")
-    # Cost lands when a session ends, so a live run has no honest figure yet.
+    spent=\$$(printf '%s' "$m" | jq '[.sessions[]?.cost_usd // 0] | add // 0 | . * 100 | round / 100')
+    # Cost lands when a session ends, so a live one has no honest figure yet.
     [ "$state" = running ] && spent=-
-    minutes=$((($(epoch "$(jq -r '.finished // empty' "$m")") - $(epoch "$(jq -r .started "$m")")) / 60))
+    finished=$(printf '%s' "$m" | jq -r '([.sessions[]?.finished // empty] | last) // .finished // empty')
+    [ "$state" = running ] && finished=
+    minutes=$((($(epoch "$finished") - $(epoch "$(printf '%s' "$m" | jq -r .started)")) / 60))
     printf '%-16s %-18s %-9s %4sm  idle %-6s events %-5s spent %-7s %-12s %s\n' \
-        "$id" "$(jq -r '.model // .harness // "claude"' "$m")" "$state" "$minutes" "$idle" "$events" \
-        "$spent" \
-        "$(jq -r '[.sessions[]? | .outcome // (if .ok then "ok" else "not-ok" end)] | join(",")' "$m")" "$flag"
+        "$id" "$(printf '%s' "$m" | jq -r '(.sessions | last | .model) // .model // .harness // "-"')" \
+        "$state" "$minutes" "$idle" "$events" "$spent" \
+        "$(printf '%s' "$m" | jq -r '[.sessions[]? | .outcome as $o
+            | if .action then $o
+              elif .state == "running" then "running"
+              elif .ok then "ok" else ($o // "not-ok") end] | join(",")')" "$flag"
 }
 
 # Harness-specific: Claude Code's stream-json. Moves into the claude adapter
@@ -78,7 +94,7 @@ if [ $# -gt 0 ]; then
     row "$dir"
     latest=$(latest_transcript "$dir")
     if [ -n "$latest" ]; then
-        if [ "$(jq -r '.harness // "claude"' "$dir/manifest.json")" = pi ]; then
+        if [ "$(workspace_json "$dir" | jq -r '(.sessions | last | .harness) // .harness // "claude"')" = pi ]; then
             pi_recent "$latest" "${2:-10}"
         else
             claude_recent "$latest" "${2:-10}"
