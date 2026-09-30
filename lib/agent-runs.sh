@@ -1,6 +1,7 @@
 # Shared by the scripts/agent-* tools: where workspaces live and how their
-# records are read. Pure functions, except repo_commits and clone_local (git) —
-# so scripts/agent-runs.test.sh can source this and check it on its own.
+# records are read. repo_commits and clone_local use git; workspace_json and
+# running_sessions read records. session_json needs the caller's $root to locate
+# scripts/lib/agent-review.jq. Tests can source this without podman or systemd.
 #
 # Three separate things, combined by whoever calls the tools:
 #
@@ -15,47 +16,11 @@
 # starts and when it finalizes the session, the session itself for its result.
 # One file per session means sessions in a workspace never contend for a file.
 
-# Changed paths include deleted files and submodule pins in the denominator.
-changed_files() { # <work-dir> <ref>
-    (
-        cd "$1"
-        scratch=$(mktemp -d)
-        trap 'rm -rf "$scratch"' EXIT
-        echo . >"$scratch/repos"
-        git submodule --quiet foreach --recursive 'echo "$displaypath"' >>"$scratch/repos" || exit 1
-        : >"$scratch/files"
-        while IFS= read -r repo; do
-            git -C "$repo" diff --no-renames --name-only -z "$2" HEAD >"$scratch/paths" || exit 1
-            jq -Rs --arg repo "$repo" 'split("\u0000") | .[] | select(length > 0)
-                | if $repo == "." then . else $repo + "/" + . end' \
-                <"$scratch/paths" >>"$scratch/files" || exit 1
-        done <"$scratch/repos"
-        jq -s 'unique' "$scratch/files"
-    )
-}
-
 session_json() { # <workspace-dir> <record-json>; read-only enrichment
-    review_dir=$1
-    review_record=$2
-    # Finalization persists evidence once; later readers (and landing after the
-    # clone is removed) use that snapshot, including human reconciliation.
-    if printf '%s\n' "$review_record" | jq -e 'has("opened_in_full") or (.read_only != true)' >/dev/null; then
-        printf '%s\n' "$review_record"
-        return
-    fi
-    report=$(printf '%s\n' "$review_record" | jq -L "$root/scripts/lib" 'include "agent-review"; review_report')
-    metric=null
-    transcript=$(printf '%s\n' "$review_record" | jq -r '.transcript // empty')
-    changed=$(printf '%s\n' "$review_record" | jq -c '.changed_files // null')
-    case "$transcript" in
-        transcripts/*.jsonl)
-            if [ "$changed" != null ] && [ -f "$review_dir/$transcript" ]; then
-                metric=$(jq -s -L "$root/scripts/lib" --argjson changed "$changed" \
-                    'include "agent-review"; opened_in_full($changed)' "$review_dir/$transcript" 2>/dev/null) || metric=null
-            fi ;;
-    esac
-    printf '%s\n' "$review_record" | jq --argjson report "$report" --argjson metric "$metric" '
-        if .read_only then . + {review: (.review // $report), opened_in_full: $metric} else . end'
+    # Preserve the stored report, including human reconciliation. The workspace
+    # argument is retained for callers; no transcript or clone is needed.
+    printf '%s\n' "$2" | jq -L "$root/scripts/lib" 'include "agent-review";
+        if .read_only == true and .review == null then . + {review: review_report} else . end'
 }
 
 runs_dir() {
