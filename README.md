@@ -44,7 +44,7 @@ Run these from the host, not inside an agent container.
 | start any task in a new workspace | `scripts/agent-run --prompt <file\|text>` |
 | add a session | `scripts/agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `scripts/agent-result <workspace>[/<n>] [--wait]` |
-| fix a review | `scripts/agent-fix <workspace>[/<n>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
+| fix a review | `scripts/agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
 | record the human's judgment | `scripts/agent-verdict <workspace> [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]` |
 | fetch commits without merging | `scripts/agent-harvest <workspace>` |
 | gate and merge harvested work | `scripts/agent-land <workspace>` |
