@@ -1,0 +1,57 @@
+#!/bin/sh
+# Start a writer from a review in an existing workspace, without ClearHead.
+# Usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi]
+#        [--model id] [--note <file|text>] [--nits] [--wait]
+# Without n, use the latest read-only session with a parsed review. Findings
+# remain unreconciled: only the human can reconcile them after a fix.
+# Prints agent-run's session reference and returns its exit status.
+set -eu
+say() { echo "agent-fix > $*" >&2; }
+ref=${1:?usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi] [--model id] [--note <file|text>] [--nits] [--wait]}
+shift
+harness="" model="" note="" nits=false wait=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --harness) harness=${2:?--harness needs claude or pi}; shift 2 ;;
+        --model) model=${2:?--model needs a model id}; shift 2 ;;
+        --note) note=${2:?--note needs a file or text}; shift 2 ;;
+        --nits) nits=true; shift ;;
+        --wait) wait=1; shift ;;
+        *) say "unknown argument: $1"; exit 2 ;;
+    esac
+done
+case "$harness" in "" | claude | pi) ;; *) say "unknown harness: $harness"; exit 2 ;; esac
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-runs.sh"
+ws=$(ref_workspace "$ref")
+n=$(ref_session "$ref")
+case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace reference: $ref"; exit 2 ;; esac
+case "$ref" in
+    */*) case "$n" in "" | *[!0-9]*) say "invalid session reference: $ref"; exit 2 ;; esac ;;
+esac
+run="$(runs_dir)/$ws"
+[ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
+# The shared reader preserves stored reports and parses older closing records.
+record=$(workspace_json "$run" | jq -c -L "$root/scripts/lib" --arg n "$n" '
+    include "agent-review";
+    [.sessions[] | select(.read_only == true)
+     | select(if $n == "" then (.review | valid_review_report) else (.n | tostring) == $n end)]
+    | sort_by(.n) | last')
+[ "$record" != null ] || { say "no read-only session with a parsed review for $ref"; exit 1; }
+printf '%s\n' "$record" | jq -e -L "$root/scripts/lib" 'include "agent-review"; .review | valid_review_report' >/dev/null ||
+    { say "session $ref has no review or its review is unparsed"; exit 1; }
+if [ -f "$note" ]; then note=$(cat "$note"); fi
+# Nits alone never authorize a fix; a note can authorize a nit-only session.
+printf '%s\n' "$record" | jq -e --arg note "$note" '
+    ($note | length) > 0 or any(.review.findings[]; .severity == "blocking" or .severity == "should-fix")' >/dev/null ||
+    { say "no blocking or should-fix finding and no note for $ref"; exit 1; }
+prompt=$(printf '%s\n' "$record" | jq -r --arg ws "$ws" --arg note "$note" --argjson nits "$nits" '
+    "Run kind: fix. Target: review session \($ws)/\(.n).\n\n" +
+    "Review verdict: \(.review.verdict)\n\nFindings (verbatim JSON objects):\n```json\n" +
+    ([.review.findings[] | select(.severity == "blocking" or .severity == "should-fix" or $nits)] | tojson) +
+    "\n```\n\nNote (human/orchestrator decisions and answers):\n" + $note')
+set -- --in "$ws" --prompt "$prompt"
+[ -z "$harness" ] || set -- "$@" --harness "$harness"
+[ -z "$model" ] || set -- "$@" --model "$model"
+[ "$wait" -eq 0 ] || set -- "$@" --wait
+exec "$root/scripts/agent-run" "$@"
