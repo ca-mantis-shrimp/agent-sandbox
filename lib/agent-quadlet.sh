@@ -54,9 +54,21 @@ render_agent_unit() { # <id> <image> <exec> <volumes> <environment> <secret> <cp
     printf 'OOMPolicy=kill\n'
 }
 
-# True if the run's unit is currently active (loaded and running).
+# Whether a unit in <state>, systemctl is-active's word for it, may still be
+# running. Only inactive and failed mean it stopped. Anything else counts as
+# running, including no answer at all: systemd re-executes itself when it is
+# upgraded, and a wait that took that silence for the end finalized a session
+# that was still working (2026-09-30).
+unit_state_running() { # <state>
+    case "$1" in
+        inactive | failed) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
+# True unless the run's unit has stopped (see unit_state_running).
 agent_unit_active() { # <id>
-    systemctl --user is-active -q "$(quadlet_unit "$1").service" 2>/dev/null
+    unit_state_running "$(systemctl --user is-active "$(quadlet_unit "$1").service" 2>/dev/null)"
 }
 
 # Prints Result, ExecMainCode and ExecMainStatus, one KEY=VALUE per line, for

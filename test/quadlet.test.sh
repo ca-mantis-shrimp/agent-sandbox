@@ -85,4 +85,13 @@ true
 [ "$(classify_agent_outcome '' '' '' 0)" = "failed:unit-state-unavailable" ]
 [ "$(classify_agent_outcome '' '' '' 1)" = "failed:unit-state-unavailable" ]
 
+# Only a stopped unit ends a wait; a manager that does not answer (empty, as
+# while systemd re-executes itself) is not a stop.
+unit_state_running active
+unit_state_running activating
+unit_state_running deactivating
+unit_state_running ""
+if unit_state_running inactive; then exit 1; fi
+if unit_state_running failed; then exit 1; fi
+
 printf 'agent-quadlet tests passed\n'
