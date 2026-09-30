@@ -32,6 +32,7 @@
 # instead.
 #   AGENT_RUN_DEADLINE_SEC   wall-clock deadline, RuntimeMaxSec (default 21600, 6h)
 #   AGENT_STOP_GRACE_SEC     grace before SIGKILL, TimeoutStopSec (default 60)
+#   AGENT_CLAUDE_MODEL, AGENT_PI_MODEL   override agents/models.env for this run
 #
 # The unit's identity (agent-<id>.service) and journald's per-unit log are
 # also what a later interactive attach would key off; this script does not
@@ -53,12 +54,15 @@ stop_grace=${AGENT_STOP_GRACE_SEC:-60}
 
 mkdir -p "$run"
 cp -R "$root/agents" "$run/agents"
+# Models come from the run's snapshot, so the manifest records what ran.
+. "$run/agents/models.env"
+case "$harness" in claude) model=$AGENT_CLAUDE_MODEL ;; pi) model=$AGENT_PI_MODEL ;; esac
 manifest() { # merge a jq expression into manifest.json
     jq "$@" "$run/manifest.json" >"$run/manifest.tmp" && mv "$run/manifest.tmp" "$run/manifest.json"
 }
 jq -n --arg id "$id" --arg base "$(git -C "$root" rev-parse HEAD)" \
-    --arg action "${1:-queue}" --arg harness "$harness" --arg started "$(date -Iseconds)" \
-    '{id: $id, base: $base, branch: "agent/\($id)", action: $action, harness: $harness, state: "preparing", started: $started}' \
+    --arg action "${1:-queue}" --arg harness "$harness" --arg model "$model" --arg started "$(date -Iseconds)" \
+    '{id: $id, base: $base, branch: "agent/\($id)", action: $action, harness: $harness, model: $model, state: "preparing", started: $started}' \
     >"$run/manifest.json"
 
 # Keep a terminal record if any preparation step fails under `set -e`.
@@ -144,6 +148,7 @@ environment=$(
     env_line AGENT_MAX_ACTIONS
     env_line AGENT_SESSION_USD
     env_line AGENT_RUN_USD
+    env_line AGENT_CLAUDE_MODEL
     env_line AGENT_PI_MODEL
 )
 # Only expose the Claude secret to Claude runs; Pi uses its separate volume.

@@ -52,8 +52,8 @@ row() { # <run-dir>
     # Cost lands when a session ends, so a live run has no honest figure yet.
     [ "$state" = running ] && spent=-
     minutes=$((($(epoch "$(jq -r '.finished // empty' "$m")") - $(epoch "$(jq -r .started "$m")")) / 60))
-    printf '%-16s %-9s %4sm  idle %-6s events %-5s spent %-7s %-12s %s\n' \
-        "$id" "$state" "$minutes" "$idle" "$events" \
+    printf '%-16s %-18s %-9s %4sm  idle %-6s events %-5s spent %-7s %-12s %s\n' \
+        "$id" "$(jq -r '.model // .harness // "claude"' "$m")" "$state" "$minutes" "$idle" "$events" \
         "$spent" \
         "$(jq -r '[.sessions[]?.outcome] | join(",")' "$m")" "$flag"
 }

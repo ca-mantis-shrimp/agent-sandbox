@@ -23,6 +23,8 @@ if [ "${1:-}" = --target-file ]; then
     set -- "$target"
 fi
 
+. /agents/models.env
+
 cd /job/work
 echo "loop > building clearhead from this branch"
 cargo build -q --manifest-path clearhead-core/Cargo.toml -p clearhead_cli
@@ -61,7 +63,7 @@ pi_session() { # <prompt-file> <transcript>
     # session at the threshold. A single in-flight request may overshoot it.
     prompt=$1 log=$2
     pi -p --mode json --provider openai-codex \
-        --model "${AGENT_PI_MODEL:-gpt-5.6-sol}" \
+        --model "$AGENT_PI_MODEL" \
         --exclude-tools bg_run,bg_delegate,subagent,ScheduleWakeup \
         "$(cat "$prompt")" >"$log" 2>"$log.stderr" &
     agent_pid=$!
@@ -104,6 +106,7 @@ session() { # <action-id> <n>
             /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
     else
         claude -p "$(cat /tmp/prompt.md)" --dangerously-skip-permissions \
+            --model "$AGENT_CLAUDE_MODEL" \
             --max-budget-usd "$session_usd" \
             --disallowedTools $blocked_tools \
             --output-format stream-json --verbose >"$log" || true
