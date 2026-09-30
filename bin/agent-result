@@ -1,0 +1,35 @@
+#!/bin/sh
+#
+# Print a run's manifest as JSON: the contract every caller reads, whichever
+# harness it is.
+#
+#   scripts/agent-result <id> [--wait]
+#
+# A run whose unit has stopped is finalized first (scripts/agent-reconcile), so
+# the manifest carries its terminal state, outcome, sessions and commits.
+# Without --wait a run that is still going prints its manifest as it stands;
+# with --wait this blocks until the unit stops. Only the manifest goes to
+# stdout. Exit: 0 finished, 1 failed or stopped, 3 still running.
+set -eu
+
+id=${1:?usage: scripts/agent-result <id> [--wait]}
+wait=0
+[ "${2:-}" = --wait ] && wait=1
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-quadlet.sh"
+manifest="${AGENT_RUNS:-$HOME/agent-runs}/$id/manifest.json"
+test -f "$manifest" || { echo "agent-result > no run $id" >&2; exit 1; }
+
+if [ "$wait" -eq 1 ]; then
+    while agent_unit_active "$id"; do sleep 2; done
+fi
+if [ "$(jq -r .state "$manifest")" = running ] && ! agent_unit_active "$id"; then
+    "$root/scripts/agent-reconcile" "$id" >&2 || true
+fi
+
+cat "$manifest"
+case "$(jq -r .state "$manifest")" in
+    finished) exit 0 ;;
+    preparing | running) exit 3 ;;
+    *) exit 1 ;;
+esac

@@ -12,7 +12,7 @@
 # message says why, and it goes into manifest.json with the session's cost.
 # The run stops when no untried action is queued, or at a limit:
 #   AGENT_MAX_ACTIONS      sessions per run          (default 10)
-#   AGENT_SESSION_USD      spend cap per session     (default 3)
+#   AGENT_SESSION_USD      spend cap per session     (default 3, /agents/session)
 #   AGENT_RUN_USD          spend cap per run         (default 15)
 set -eu
 
@@ -23,15 +23,12 @@ if [ "${1:-}" = --target-file ]; then
     set -- "$target"
 fi
 
-. /agents/models.env
-
 cd /job/work
 echo "loop > building clearhead from this branch"
 cargo build -q --manifest-path clearhead-core/Cargo.toml -p clearhead_cli
 export PATH="$CARGO_TARGET_DIR/debug:$PATH"
 
 max=${AGENT_MAX_ACTIONS:-10}
-session_usd=${AGENT_SESSION_USD:-3}
 run_usd=${AGENT_RUN_USD:-15}
 tried=/tmp/tried
 : >"$tried"
@@ -54,72 +51,20 @@ spent() {
     jq '[.sessions[]?.cost_usd] | add // 0' /job/manifest.json
 }
 
-# Headless sessions end when the agent replies; nothing resumes them.
-blocked_tools="ScheduleWakeup CronCreate Monitor RemoteTrigger"
-harness=${AGENT_HARNESS:-claude}
-
-pi_session() { # <prompt-file> <transcript>
-    # Pi has no built-in spend cap. Watch its usage events and terminate the
-    # session at the threshold. A single in-flight request may overshoot it.
-    prompt=$1 log=$2
-    pi -p --mode json --provider openai-codex \
-        --model "$AGENT_PI_MODEL" \
-        --exclude-tools bg_run,bg_delegate,subagent,ScheduleWakeup \
-        "$(cat "$prompt")" >"$log" 2>"$log.stderr" &
-    agent_pid=$!
-    over=0
-    while kill -0 "$agent_pid" 2>/dev/null; do
-        cost=$(jq -s '[.[] | select(.type == "message_end") | .message.usage.cost.total // 0] | add // 0' "$log" 2>/dev/null || echo 0)
-        if jq -n -e --argjson cost "$cost" --argjson cap "$session_usd" '$cost >= $cap' >/dev/null; then
-            echo "loop > Pi session reached spend cap ($cost >= $session_usd); stopping" >&2
-            kill "$agent_pid" 2>/dev/null || true
-            over=1
-            break
-        fi
-        sleep 2
-    done
-    status=0
-    wait "$agent_pid" || status=$?
-    [ "$over" -eq 0 ] && [ "$status" -eq 0 ]
-}
-
+# One session on one action: the prompt is ours, the session is the runner's
+# (/agents/session records exit, cost and closing message). The outcome is the
+# action's real state afterwards, whatever the session's own ending was; both
+# land in the manifest, so a completed action behind a failed session shows.
 session() { # <action-id> <n>
-    log="/job/transcripts/$2-${1#urn:uuid:}.jsonl"
     echo "$1" >>"$tried"
     echo "loop > session $2: $1"
     sed "s|{{ACTION}}|$1|g" /agents/prompt.md >/tmp/prompt.md
-    if [ "$harness" = pi ]; then
-        ok=0
-        pi_session /tmp/prompt.md "$log" && ok=1
-        result=$(jq -s '{cost: ([.[] | select(.type == "message_end") | .message.usage.cost.total // 0] | add // 0),
-            last: ([.[] | select(.type == "message_end" and .message.role == "assistant") | .message] | last // {})}' "$log")
-        stop=$(printf '%s' "$result" | jq -r '.last.stopReason // empty')
-        [ "$stop" = stop ] || ok=0
-        closing=$(printf '%s' "$result" | jq -r '[.last.content[]? | select(.type == "text") | .text] | join("\n")')
-        [ -n "$closing" ] || ok=0
-        if [ "$ok" -eq 1 ]; then actual=$(outcome "$1"); else actual=unfinished; fi
-        jq --arg a "$1" --arg o "$actual" --arg log "${log#/job/}" \
-            --arg why "${closing:-Pi stopped without a closing message (stopReason: ${stop:-none}); inspect transcript and stderr}" \
-            --argjson r "$result" \
-            '.sessions += [{action: $a, outcome: $o, cost_usd: $r.cost,
-                            why: $why, stop_reason: ($r.last.stopReason // null), transcript: $log}]' \
-            /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
-    else
-        claude -p "$(cat /tmp/prompt.md)" --dangerously-skip-permissions \
-            --model "$AGENT_CLAUDE_MODEL" \
-            --max-budget-usd "$session_usd" \
-            --disallowedTools $blocked_tools \
-            --output-format stream-json --verbose >"$log" || true
-        result=$(jq -s 'map(select(.type == "result")) | last // {}' "$log")
-        jq --arg a "$1" --arg o "$(outcome "$1")" --arg log "${log#/job/}" --argjson r "$result" \
-            '.sessions += [{action: $a, outcome: $o, cost_usd: ($r.total_cost_usd // 0),
-                            why: ($r.result // "no closing message"), transcript: $log}]' \
-            /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
-    fi
+    /agents/session /tmp/prompt.md "${1#urn:uuid:}" || true
+    jq --arg a "$1" --arg o "$(outcome "$1")" '.sessions[-1] += {action: $a, outcome: $o}' \
+        /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
     jq -r '.sessions[-1] | "loop > session: \(.outcome), $\(.cost_usd)"' /job/manifest.json
 }
 
-mkdir -p /job/transcripts
 if [ $# -gt 0 ]; then
     session "$1" 1
     exit 0

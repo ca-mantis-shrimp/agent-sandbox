@@ -43,7 +43,9 @@ git -C "$root" config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
     done
 
 # Each session's own account, including why an action was left unfinished.
-jq -r '.sessions[]? | "\nagent-harvest > \(.outcome) \(.action) ($\(.cost_usd))\n\(.why)"' "$run/manifest.json"
+# Driver runs add action and outcome to a session; "why" is the pre-split name
+# of the closing message in older manifests.
+jq -r '.sessions[]? | "\nagent-harvest > \(.outcome // (if .ok then "ok" else "not-ok" end)) \(.action // .label // "") ($\(.cost_usd))\n\(.closing // .why)"' "$run/manifest.json"
 
 jq --arg at "$(date -Iseconds)" '.harvested = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
     mv "$run/manifest.tmp" "$run/manifest.json"

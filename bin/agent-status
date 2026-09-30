@@ -55,7 +55,7 @@ row() { # <run-dir>
     printf '%-16s %-18s %-9s %4sm  idle %-6s events %-5s spent %-7s %-12s %s\n' \
         "$id" "$(jq -r '.model // .harness // "claude"' "$m")" "$state" "$minutes" "$idle" "$events" \
         "$spent" \
-        "$(jq -r '[.sessions[]?.outcome] | join(",")' "$m")" "$flag"
+        "$(jq -r '[.sessions[]? | .outcome // (if .ok then "ok" else "not-ok" end)] | join(",")' "$m")" "$flag"
 }
 
 # Harness-specific: Claude Code's stream-json. Moves into the claude adapter

@@ -39,12 +39,28 @@ case "$outcome" in
     *) state=failed ;;
 esac
 
+# What the run produced: each repo's commits since refs/agent/base, keyed by
+# its path in the clone ("." is the repo itself), repos with none left out.
+commits='{}'
+if [ -d "$run/work" ]; then
+    commits=$(
+        cd "$run/work"
+        {
+            echo .
+            git submodule --quiet foreach --recursive 'echo "$displaypath"'
+        } | while read -r repo; do
+            git -C "$repo" log --format=%H refs/agent/base..HEAD 2>/dev/null |
+                jq -R . | jq -s --arg repo "$repo" 'select(length > 0) | {($repo): .}'
+        done | jq -s 'add // {}'
+    )
+fi
+
 # Keep the unit and its properties until the manifest is durable. A later
 # invocation can retry if writing the manifest fails.
 exit_code=${mstatus:-1}
 jq --arg state "$state" --arg outcome "$outcome" --argjson code "$exit_code" \
-    --arg finished "$(date -Iseconds)" \
-    '.state = $state | .outcome = $outcome | .exit = $code | .finished = $finished' \
+    --arg finished "$(date -Iseconds)" --argjson commits "$commits" \
+    '.state = $state | .outcome = $outcome | .exit = $code | .finished = $finished | .commits = $commits' \
     "$manifest" >"$run/manifest.tmp"
 mv "$run/manifest.tmp" "$manifest"
 

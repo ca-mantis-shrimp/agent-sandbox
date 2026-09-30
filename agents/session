@@ -1,0 +1,88 @@
+#!/bin/sh
+#
+# Run one harness session on a prompt, inside the run's container, and record
+# it. Knows the harnesses (claude, pi) and nothing about what the prompt asks.
+#
+#   /agents/session <prompt-file> [label]
+#
+# Works in /job/work, writes the transcript to /job/transcripts/<n>-<label>.jsonl
+# and appends one entry to /job/manifest.json .sessions:
+#
+#   {label, ok, cost_usd, closing, stop_reason, transcript}
+#
+# ok means the harness ended its turn normally and left a closing message; what
+# that message means is the caller's business. Exits 0 when ok, 1 otherwise.
+#   AGENT_HARNESS       claude (default) or pi
+#   AGENT_SESSION_USD   spend cap for the session (default 3)
+set -eu
+
+. /agents/models.env
+prompt=${1:?usage: session <prompt-file> [label]}
+label=${2:-session}
+harness=${AGENT_HARNESS:-claude}
+session_usd=${AGENT_SESSION_USD:-3}
+
+mkdir -p /job/transcripts
+n=$(($(jq '.sessions // [] | length' /job/manifest.json) + 1))
+log="/job/transcripts/$n-$label.jsonl"
+cd /job/work
+
+# Headless sessions end when the agent replies; nothing resumes them.
+blocked_tools="ScheduleWakeup CronCreate Monitor RemoteTrigger"
+
+pi_session() {
+    # Pi has no built-in spend cap. Watch its usage events and terminate the
+    # session at the threshold. A single in-flight request may overshoot it.
+    pi -p --mode json --provider openai-codex \
+        --model "$AGENT_PI_MODEL" \
+        --exclude-tools bg_run,bg_delegate,subagent,ScheduleWakeup \
+        "$(cat "$prompt")" >"$log" 2>"$log.stderr" &
+    agent_pid=$!
+    over=0
+    while kill -0 "$agent_pid" 2>/dev/null; do
+        cost=$(jq -s '[.[] | select(.type == "message_end") | .message.usage.cost.total // 0] | add // 0' "$log" 2>/dev/null || echo 0)
+        if jq -n -e --argjson cost "$cost" --argjson cap "$session_usd" '$cost >= $cap' >/dev/null; then
+            echo "session > Pi reached the spend cap ($cost >= $session_usd); stopping" >&2
+            kill "$agent_pid" 2>/dev/null || true
+            over=1
+            break
+        fi
+        sleep 2
+    done
+    status=0
+    wait "$agent_pid" || status=$?
+    [ "$over" -eq 0 ] && [ "$status" -eq 0 ]
+}
+
+# Each adapter reduces its transcript to {ok, cost, closing, stop}.
+if [ "$harness" = pi ]; then
+    exited=0
+    pi_session && exited=1
+    # Pi exits 0 even when its session ends in error, so the last assistant
+    # message decides: a normal turn end with text.
+    result=$(jq -s --argjson exited "$exited" '
+        ([.[] | select(.type == "message_end" and .message.role == "assistant") | .message] | last // {}) as $last
+        | ([$last.content[]? | select(.type == "text") | .text] | join("\n")) as $closing
+        | {ok: ($exited == 1 and $last.stopReason == "stop" and $closing != ""),
+           cost: ([.[] | select(.type == "message_end") | .message.usage.cost.total // 0] | add // 0),
+           closing: $closing, stop: ($last.stopReason // null)}' "$log")
+else
+    claude -p "$(cat "$prompt")" --dangerously-skip-permissions \
+        --model "$AGENT_CLAUDE_MODEL" \
+        --max-budget-usd "$session_usd" \
+        --disallowedTools $blocked_tools \
+        --output-format stream-json --verbose >"$log" || true
+    result=$(jq -s '
+        (map(select(.type == "result")) | last // {}) as $r
+        | {ok: ($r.subtype == "success" and ($r.is_error | not) and (($r.result // "") != "")),
+           cost: ($r.total_cost_usd // 0),
+           closing: ($r.result // ""), stop: ($r.stop_reason // $r.subtype // null)}' "$log")
+fi
+
+jq --arg label "$label" --arg log "${log#/job/}" --argjson r "$result" \
+    '.sessions += [{label: $label, ok: $r.ok, cost_usd: $r.cost,
+                    closing: (if $r.closing == "" then "no closing message; inspect the transcript" else $r.closing end),
+                    stop_reason: $r.stop, transcript: $log}]' \
+    /job/manifest.json >/tmp/manifest.json && cp /tmp/manifest.json /job/manifest.json
+jq -r '.sessions[-1] | "session > \(if .ok then "ok" else "not ok" end), $\(.cost_usd)"' /job/manifest.json
+jq -e '.sessions[-1].ok' /job/manifest.json >/dev/null
