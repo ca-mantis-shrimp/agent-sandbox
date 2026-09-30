@@ -172,8 +172,10 @@ cleanup() {
 
 # Advisory only: a later fixer does not silently reconcile a review finding.
 # The human can record reconciliation on the finding in the session record.
+workspace='{}'
 if [ -f "$run/manifest.json" ]; then
-    workspace_json "$run" | jq -r '.sessions[]? as $s | $s.review.findings[]?
+    workspace=$(workspace_json "$run")
+    printf '%s\n' "$workspace" | jq -r '.sessions[]? as $s | $s.review.findings[]?
         | select(.severity == "blocking" and .reconciled != true)
         | "agent-land > unreconciled blocking finding (session \($s.n)): \(.file):\(.line): \(.what) — \(.why)"' >&2
 fi
@@ -185,3 +187,4 @@ gate_candidate
 advance
 cleanup
 say "landed $branch; push when ready"
+human_verdict_reminder "$id" "$workspace"

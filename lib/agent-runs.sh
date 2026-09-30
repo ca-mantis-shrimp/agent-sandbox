@@ -75,6 +75,14 @@ workspace_json() { # <workspace-dir>
     done | jq -s --argjson workspace "$workspace" '$workspace + {sessions: .}'
 }
 
+# Advisory after a successful landing. Accept the already-loaded workspace;
+# review reports may live in session files or in older inline records.
+human_verdict_reminder() { # <workspace-id> <workspace-json>
+    printf '%s\n' "$2" | jq -r --arg ws "$1" '
+        select(.human_verdict == null and any(.sessions[]?; .review != null))
+        | "agent-land > review has no human verdict; record the human’s call with scripts/agent-verdict \($ws)"' >&2
+}
+
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
 # come from <repo>'s own checkouts, not the remotes in .gitmodules, so unpushed
 # local commits are available too.

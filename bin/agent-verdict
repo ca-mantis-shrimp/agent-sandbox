@@ -1,0 +1,38 @@
+#!/bin/sh
+# Record the human's call, including after landing; no interactive prompts.
+# Usage: scripts/agent-verdict <workspace> [--agree] [--overrule <text>]...
+#        [--missed <text>]... [--note <text>]
+set -eu
+say() { echo "agent-verdict > $*" >&2; }
+ws=${1:?usage: scripts/agent-verdict <workspace> [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]}
+shift
+case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
+agree=false overruled='[]' missed='[]' note=''
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --agree) agree=true; shift ;;
+        --overrule)
+            text=${2:?--overrule needs text}
+            overruled=$(jq -cn --argjson items "$overruled" --arg text "$text" '$items + [$text]')
+            shift 2 ;;
+        --missed)
+            text=${2:?--missed needs text}
+            missed=$(jq -cn --argjson items "$missed" --arg text "$text" '$items + [$text]')
+            shift 2 ;;
+        --note) note=${2:?--note needs text}; shift 2 ;;
+        *) say "unknown argument: $1"; exit 2 ;;
+    esac
+done
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$root/scripts/lib/agent-runs.sh"
+run="$(runs_dir)/$ws"
+[ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
+tmp=$(mktemp "$run/manifest.verdict.XXXXXX")
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+jq --argjson agrees "$agree" --argjson overruled "$overruled" \
+    --argjson missed "$missed" --arg note "$note" --arg at "$(date -Iseconds)" \
+    '.human_verdict = {agrees_with_review: $agrees, overruled: $overruled,
+                       missed: $missed, note: $note, at: $at}' \
+    "$run/manifest.json" >"$tmp"
+mv "$tmp" "$run/manifest.json"
+say "recorded human verdict for $ws"
