@@ -122,7 +122,11 @@ jq -n --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model
       prompt: "prompts/\($n).md", state: "running", started: $started}' \
     >"$run/sessions/$n.json"
 
-volumes="Volume=$run:/job
+# Each workspace is mounted at its own path: Cargo keys local crates by path,
+# so with one shared /job/work it reused one workspace's build in another
+# through the shared agent-target volume (2026-09-30).
+job="/job/$ws"
+volumes="Volume=$run:$job
 Volume=$run/agents:/agents:ro
 Volume=agent-cargo:/home/agent/.cargo/registry
 Volume=agent-target:/home/agent/target
@@ -130,8 +134,9 @@ Volume=agent-pi:/home/agent/.pi/agent
 Volume=$run/pi-settings.json:/home/agent/.pi/agent/settings.json:ro
 Volume=$HOME/.pi/agent/agents:/home/agent/.pi/agent/agents:ro"
 [ "$readonly" = true ] && volumes="$volumes
-Volume=$run/work:/job/work:ro"
-environment="Environment=AGENT_HARNESS=$harness
+Volume=$run/work:$job/work:ro"
+environment="Environment=AGENT_JOB=$job
+Environment=AGENT_HARNESS=$harness
 Environment=AGENT_MODEL=$model"
 [ -n "${AGENT_SESSION_USD:-}" ] && environment="$environment
 Environment=AGENT_SESSION_USD=$AGENT_SESSION_USD"

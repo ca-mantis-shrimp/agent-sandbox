@@ -129,7 +129,7 @@ gate_candidate() {
     {
         podman build -q -t "$image" "$cand" &&
             podman run --rm --userns=keep-id --cpus 8 --memory 16g --memory-swap 16g \
-                -v "$cand:/job/work" \
+                -v "$cand:/job/land-$id/work" -w "/job/land-$id/work" \
                 -v agent-cargo:/home/agent/.cargo/registry \
                 -v agent-target:/home/agent/target \
                 "$image" sh -c '[ ! -f .sandbox/setup ] || . ./.sandbox/setup; exec "$0"' "$gate"

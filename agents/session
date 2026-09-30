@@ -6,15 +6,18 @@
 #
 #   /agents/session <n>
 #
-# Works in /job/work, writes the transcript to /job/transcripts/<n>.jsonl and
-# adds the session's result to its own record, /job/sessions/<n>.json:
+# The workspace is mounted at $AGENT_JOB (/job/<workspace>): each workspace has
+# its own path, so Cargo, which keys local crates by path, never reuses one
+# workspace's build in another through the shared target volume. Works in
+# $AGENT_JOB/work, writes the transcript to $AGENT_JOB/transcripts/<n>.jsonl
+# and adds the session's result to its own record, $AGENT_JOB/sessions/<n>.json:
 #
 #   {ok, cost_usd, closing, stop_reason, transcript, setup_sec}
 #
 # The repo being worked on may carry its own startup pieces in .sandbox/, both
 # optional, read from the clone (so they are what the branch says they are):
 #   .sandbox/setup      sourced before the session, so it can export (PATH, ...);
-#                       output goes to /job/setup.log, and a failure fails the
+#                       output goes to $AGENT_JOB/setup.log, and a failure fails the
 #                       session
 #   .sandbox/prompt.md  prose placed ahead of every prompt: the repo's standing
 #                       rules for agents working in the sandbox
@@ -25,19 +28,20 @@
 set -eu
 
 n=${1:?usage: session <n>}
-record="/job/sessions/$n.json"
-prompt="/job/$(jq -r .prompt "$record")"
+job=${AGENT_JOB:?}
+record="$job/sessions/$n.json"
+prompt="$job/$(jq -r .prompt "$record")"
 harness=${AGENT_HARNESS:?}
 model=${AGENT_MODEL:?}
 session_usd=${AGENT_SESSION_USD:-3}
-log="/job/transcripts/$n.jsonl"
+log="$job/transcripts/$n.jsonl"
 
-cd /job/work
+cd "$job/work"
 setup_started=$(date +%s)
 if [ -f .sandbox/setup ]; then
     echo "session > .sandbox/setup"
-    . ./.sandbox/setup >>/job/setup.log 2>&1
-    cd /job/work
+    . ./.sandbox/setup >>"$job/setup.log" 2>&1
+    cd "$job/work"
 fi
 setup_sec=$(($(date +%s) - setup_started))
 if [ -f .sandbox/prompt.md ]; then
@@ -97,7 +101,7 @@ else
            closing: ($r.result // ""), stop: ($r.stop_reason // $r.subtype // null)}' "$log")
 fi
 
-jq --arg log "${log#/job/}" --argjson r "$result" --argjson setup "$setup_sec" \
+jq --arg log "${log#"$job"/}" --argjson r "$result" --argjson setup "$setup_sec" \
     '. + {ok: $r.ok, cost_usd: $r.cost,
           closing: (if $r.closing == "" then "no closing message; inspect the transcript" else $r.closing end),
           stop_reason: $r.stop, transcript: $log, setup_sec: $setup}' \
