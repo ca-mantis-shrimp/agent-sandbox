@@ -6,6 +6,7 @@
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 . "$script_dir/lib/agent-runs.sh"
 
 tmp=$(mktemp -d)

@@ -40,7 +40,7 @@ fi
 "$root/scripts/agent-reconcile" "$ws" >&2 || true
 
 if [ -n "$n" ]; then
-    json=$(cat "$run/sessions/$n.json")
+    json=$(session_json "$run" "$(cat "$run/sessions/$n.json")")
 else
     commits='{}'
     [ -d "$run/work" ] && commits=$(repo_commits "$run/work" refs/agent/base)

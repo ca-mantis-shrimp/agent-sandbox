@@ -1,6 +1,7 @@
 # Shared by the scripts/agent-* tools: where workspaces live and how their
-# records are read. Pure functions, except repo_commits and clone_local (git) —
-# so scripts/agent-runs.test.sh can source this and check it on its own.
+# records are read. repo_commits and clone_local use git; workspace_json and
+# running_sessions read records. session_json needs the caller's $root to locate
+# scripts/lib/agent-review.jq. Tests can source this without podman or systemd.
 #
 # Three separate things, combined by whoever calls the tools:
 #
@@ -14,6 +15,13 @@
 # A session's record is written by whoever knows the fact: the host when it
 # starts and when it finalizes the session, the session itself for its result.
 # One file per session means sessions in a workspace never contend for a file.
+
+session_json() { # <workspace-dir> <record-json>; read-only enrichment
+    # Preserve the stored report, including human reconciliation. The workspace
+    # argument is retained for callers; no transcript or clone is needed.
+    printf '%s\n' "$2" | jq -L "$root/scripts/lib" 'include "agent-review";
+        if .read_only == true and .review == null then . + {review: review_report} else . end'
+}
 
 runs_dir() {
     printf '%s\n' "${AGENT_RUNS:-$HOME/agent-runs}"
@@ -55,13 +63,16 @@ workspace_json() { # <workspace-dir>
     for f in "$dir"/sessions/*.json; do
         [ -f "$f" ] && set -- "$@" "$f"
     done
-    jq -s '.[0] as $m
+    workspace=$(jq -s '.[0] as $m
         | (($m.sessions // []) + (.[1:] | sort_by(.n))) as $sessions
         | [$sessions[] | .state // empty] as $states
         | $m + {sessions: $sessions,
                 state: (if ($states | any(. == "running")) then "running"
                         elif ($states | length) > 0 then $states[-1]
-                        else $m.state end)}' "$@"
+                        else $m.state end)}' "$@")
+    printf '%s\n' "$workspace" | jq -c '.sessions[]?' | while IFS= read -r session; do
+        session_json "$dir" "$session"
+    done | jq -s --argjson workspace "$workspace" '$workspace + {sessions: .}'
 }
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules

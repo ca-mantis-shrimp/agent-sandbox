@@ -56,7 +56,9 @@ for n in ${only:-$(running_sessions "$run")}; do
         --arg finished "$(date -Iseconds)" --argjson commits "$commits" \
         '. + {state: $state, outcome: $outcome, exit: $code, finished: $finished, commits: $commits}' \
         "$record" >"$record.tmp"
-    mv "$record.tmp" "$record"
+    session_json "$run" "$(cat "$record.tmp")" >"$record.enriched"
+    mv "$record.enriched" "$record"
+    rm -f "$record.tmp"
 
     rm -f "$(quadlet_dir)/$unit.container"
     systemctl --user reset-failed "$unit.service" >/dev/null 2>&1 || true
