@@ -17,7 +17,7 @@
 # answers the same questions from the collector.
 set -eu
 
-tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-quadlet.sh"
 . "$tool/lib/agent-runs.sh"
 runs=$(runs_dir)
@@ -104,5 +104,5 @@ if [ $# -gt 0 ]; then
 fi
 
 for dir in "$runs"/*/; do
-    [ -f "$dir/manifest.json" ] && row "${dir%/}"
+    if [ -f "$dir/manifest.json" ]; then row "${dir%/}"; fi
 done

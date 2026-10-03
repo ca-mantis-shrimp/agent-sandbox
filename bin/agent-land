@@ -30,7 +30,7 @@
 set -eu
 
 id=${1:?usage: agent-land <id>}
-tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-runs.sh"
 branch="agent/$id"
 run="$(runs_dir)/$id"

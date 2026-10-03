@@ -10,13 +10,28 @@ Run headless agents in disposable, rootless Podman containers on your own hardwa
 
 One writer at a time per workspace; a writer excludes readers. Read-only sessions may overlap. Work belonging together goes in one workspace, as sessions (`--in`). Parallel workspaces should cover separate areas: independent clones otherwise conflict or start without each other's unlanded work. The human's review time is the limit: at most two unreviewed workspaces. While a session works, the orchestrator works on something that does not overlap.
 
-## Install and host setup
+## Install
 
-Put `bin/` on your `PATH`. The tools find their own `lib/` and `agents/` beside it, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
+```sh
+git clone <this repository> ~/Products/agent-sandbox   # or check out a tag to pin a version
+~/Products/agent-sandbox/install.sh
+```
 
-The host needs Git, jq, Podman and a systemd user session (`loginctl enable-linger` helps it survive logout).
+`install.sh` links each command in `bin/` into `${PREFIX:-~/.local}/bin`, which is on `PATH` in most Linux sessions, and reports what the host still lacks. It installs nothing else, so a host with a read-only `/usr` is fine. The links point into the checkout: `git pull` updates the commands, and a workspace keeps the harness snapshot it started with. The commands find `lib/` and `agents/` through their links, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
 
-The image is built in two layers. The target repository's root `Containerfile` comes first: built as root, on any base, it installs the tools that repository needs and must also provide `git`, `jq` and `npm`. The sandbox's `agents/Containerfile` goes over it, adding the harnesses (and their version pins) and the uid-1000 user sessions run as, whose home is `/home/agent`. Tools live in the image. Claude sessions use the `claude_token` Podman secret; pi sessions use the sandbox's own login in the `agent-pi` volume, not the host's `auth.json`, and reuse the host's `~/.pi/agent/settings.json` when there is one.
+## Host setup
+
+The host provides, once:
+
+- Git, jq, `flock` (util-linux), Podman (rootless, with subordinate IDs for your user in `/etc/subuid` and `/etc/subgid`) and a systemd user session.
+- uid 1000 for the user running the sandbox: sessions run as uid 1000 under `--userns=keep-id`, so their commits stay yours.
+- `loginctl enable-linger`, so sessions survive logging out.
+- The `claude_token` Podman secret for Claude sessions: `claude setup-token`, then `podman secret create claude_token -` with the token on stdin.
+- For pi sessions, the sandbox's own pi login in the `agent-pi` volume, never the host's `auth.json`: log in once with `podman run --rm -it --userns=keep-id -v agent-pi:/home/agent/.pi/agent localhost/<repo>-agent pi`, then `/login`. The host's `~/.pi/agent/settings.json` is reused when there is one.
+
+Rerun `install.sh` to check them. Images need nothing installed: `agent-new` builds them per repository.
+
+The image is built in two layers. The target repository's root `Containerfile` comes first: built as root, on any base, it installs the tools that repository needs and must also provide `git`, `jq` and `npm`. The sandbox's `agents/Containerfile` goes over it, adding the harnesses (and their version pins) and the uid-1000 user sessions run as, whose home is `/home/agent`. Tools live in the image.
 
 Workspaces live at `$AGENT_RUNS/<workspace>/` (default `~/agent-runs`):
 

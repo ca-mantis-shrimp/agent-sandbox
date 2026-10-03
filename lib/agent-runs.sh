@@ -1,7 +1,8 @@
 # Shared by the agent-* tools: where workspaces live and how their
 # records are read. repo_commits and clone_local use git; workspace_json and
 # running_sessions read records. session_json and human_verdict_reminder need
-# the caller's $tool, the sandbox's own directory, to locate lib/agent-review.jq.
+# the caller's $tool, the sandbox's own directory (each tool resolves it
+# through any symlink to itself), to locate lib/agent-review.jq.
 # Tests can source this without podman or systemd.
 #
 # Three separate things, combined by whoever calls the tools:

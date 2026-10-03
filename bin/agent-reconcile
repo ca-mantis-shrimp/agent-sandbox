@@ -11,7 +11,7 @@
 set -eu
 
 ref=${1:?usage: agent-reconcile <workspace>[/<n>]}
-tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-quadlet.sh"
 . "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")

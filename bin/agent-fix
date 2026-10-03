@@ -23,7 +23,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$harness" in "" | claude | pi) ;; *) say "unknown harness: $harness"; exit 2 ;; esac
-tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")
 n=$(ref_session "$ref")

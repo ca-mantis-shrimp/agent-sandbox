@@ -23,7 +23,7 @@ set -eu
 
 say() { echo "agent-new > $*" >&2; }
 
-tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-runs.sh"
 repo=$(git rev-parse --show-toplevel 2>/dev/null) || { say "run this inside a git repository"; exit 2; }
 # One image per repo.

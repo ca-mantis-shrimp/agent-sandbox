@@ -75,7 +75,7 @@ case "$harness" in claude | pi) ;; *) say "unknown harness: $harness"; exit 2 ;;
 # Before any cd: a relative prompt path is relative to the caller.
 if [ -f "$prompt" ]; then prompt_text=$(cat "$prompt"); else prompt_text=$prompt; fi
 
-tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-quadlet.sh"
 . "$tool/lib/agent-runs.sh"
 cpus=$(session_cpus)
