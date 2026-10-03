@@ -1,13 +1,13 @@
 #!/bin/sh
 # Start a writer from a review in an existing workspace, without ClearHead.
-# Usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi]
+# Usage: agent-fix <workspace>[/<n>] [--harness claude|pi]
 #        [--model id] [--review <file> --reviewer <name>] [--note <file|text>] [--nits] [--wait]
 # Without n, use the latest read-only session with a parsed review. Findings
 # remain unreconciled: only the human can reconcile them after a fix.
 # Prints agent-run's session reference and returns its exit status.
 set -eu
 say() { echo "agent-fix > $*" >&2; }
-ref=${1:?usage: scripts/agent-fix <workspace>[/<n>] [--harness claude|pi] [--model id] [--review <file> --reviewer <name>] [--note <file|text>] [--nits] [--wait]}
+ref=${1:?usage: agent-fix <workspace>[/<n>] [--harness claude|pi] [--model id] [--review <file> --reviewer <name>] [--note <file|text>] [--nits] [--wait]}
 shift
 harness="" model="" review_file="" reviewer="" note="" nits=false wait=0
 while [ $# -gt 0 ]; do
@@ -23,8 +23,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$harness" in "" | claude | pi) ;; *) say "unknown harness: $harness"; exit 2 ;; esac
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-runs.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")
 n=$(ref_session "$ref")
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace reference: $ref"; exit 2 ;; esac
@@ -36,7 +36,7 @@ run="$(runs_dir)/$ws"
 if [ -n "$review_file" ]; then
     [ -z "$n" ] || { say "--review cannot be combined with a session reference"; exit 2; }
     [ -n "$reviewer" ] || { say "--review requires --reviewer <name>"; exit 2; }
-    review=$(jq -c -s -L "$root/scripts/lib" '
+    review=$(jq -c -s -L "$tool/lib" '
         include "agent-review";
         if length == 1 and (.[0] | valid_review_report) then .[0]
         else error("expected one valid review report") end' "$review_file") ||
@@ -44,13 +44,13 @@ if [ -n "$review_file" ]; then
 else
     [ -z "$reviewer" ] || { say "--reviewer requires --review"; exit 2; }
     # The shared reader preserves stored reports and parses older closing records.
-    record=$(workspace_json "$run" | jq -c -L "$root/scripts/lib" --arg n "$n" '
+    record=$(workspace_json "$run" | jq -c -L "$tool/lib" --arg n "$n" '
         include "agent-review";
         [.sessions[] | select(.read_only == true)
          | select(if $n == "" then (.review | valid_review_report) else (.n | tostring) == $n end)]
         | sort_by(.n) | last')
     [ "$record" != null ] || { say "no read-only session with a parsed review for $ref"; exit 1; }
-    printf '%s\n' "$record" | jq -e -L "$root/scripts/lib" 'include "agent-review"; .review | valid_review_report' >/dev/null ||
+    printf '%s\n' "$record" | jq -e -L "$tool/lib" 'include "agent-review"; .review | valid_review_report' >/dev/null ||
         { say "session $ref has no review or its review is unparsed"; exit 1; }
     review=$(printf '%s\n' "$record" | jq -c .review)
     target="review session $ws/$(printf '%s\n' "$record" | jq -r .n)"
@@ -81,4 +81,4 @@ set -- --in "$ws" --prompt "$prompt"
 [ -z "$harness" ] || set -- "$@" --harness "$harness"
 [ -z "$model" ] || set -- "$@" --model "$model"
 [ "$wait" -eq 0 ] || set -- "$@" --wait
-exec "$root/scripts/agent-run" "$@"
+exec "$tool/bin/agent-run" "$@"

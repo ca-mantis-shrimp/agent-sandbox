@@ -3,23 +3,23 @@
 # On-demand summary of agent workspaces, read from their records, transcripts
 # and each session's systemd --user unit.
 #
-#   scripts/agent-status                    one line per workspace
-#   scripts/agent-status <workspace> [n]    its line, then the last n tool
+#   agent-status                    one line per workspace
+#   agent-status <workspace> [n]    its line, then the last n tool
 #                                           calls of its newest session (default 10)
 #
 # The agent column is the newest session's model; the outcome column lists
 # every session in order. idle is seconds since the newest transcript event:
 # the heartbeat, with no hook into the harness. A session idle past
 # $AGENT_STUCK_SECS (default 600) is flagged STUCK; a session whose record
-# still says running with no active unit is finalized by scripts/agent-result
-# (or the next scripts/agent-run in that workspace). spent counts finished
+# still says running with no active unit is finalized by agent-result
+# (or the next agent-run in that workspace). spent counts finished
 # sessions and shows - while one runs. This is the bridge until telemetry
 # answers the same questions from the collector.
 set -eu
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-quadlet.sh"
-. "$root/scripts/lib/agent-runs.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-runs.sh"
 runs=$(runs_dir)
 stuck=${AGENT_STUCK_SECS:-600}
 now=$(date +%s)

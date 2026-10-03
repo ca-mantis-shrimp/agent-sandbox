@@ -1,14 +1,14 @@
 #!/bin/sh
 #
-# Tests scripts/lib/agent-quadlet.sh's pure functions: unit rendering and the
+# Tests lib/agent-quadlet.sh's pure functions: unit rendering and the
 # systemd-state-to-outcome mapping. No podman and no systemd --user session
 # needed (neither is available inside the agent sandbox); each assertion is
 # a check that aborts the script under set -e, so getting to the final line
 # is the pass.
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-. "$script_dir/lib/agent-quadlet.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-quadlet.sh"
 
 # --- quadlet_dir / quadlet_unit -------------------------------------------
 
@@ -27,7 +27,7 @@ unit=$(render_agent_unit 20260926-000000 clearhead-agent "/agents/session 1" \
 Volume=/run/it/agents:/agents:ro" \
     "Environment=AGENT_HARNESS=claude" \
     "Secret=claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN" \
-    800 21600 60)
+    800 16G 21600 60)
 
 assert_line() { # <expected exact line>
     printf '%s\n' "$unit" | grep -qxF "$1" || {
@@ -58,7 +58,8 @@ assert_line "OOMPolicy=kill"
 # A run with no secret (pi) and no extra environment omits both lines, rather
 # than rendering "Secret=" or "Environment=" empty.
 bare=$(render_agent_unit 20260926-000001 clearhead-agent "/agents/session 1" \
-    "Volume=/run/it:/job" "" "" 800 21600 60)
+    "Volume=/run/it:/job" "" "" 800 8G 21600 60)
+printf '%s\n' "$bare" | grep -qxF MemoryMax=8G
 printf '%s\n' "$bare" | grep -q '^Secret=' && { echo "agent-quadlet.test: unexpected Secret= line" >&2; exit 1; }
 printf '%s\n' "$bare" | grep -q '^Environment=' && { echo "agent-quadlet.test: unexpected Environment= line" >&2; exit 1; }
 true

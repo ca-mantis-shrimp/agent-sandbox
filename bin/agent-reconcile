@@ -3,17 +3,17 @@
 # not wait for them: write the session's terminal state, outcome, exit code and
 # the commits it made into its record, then remove its unit.
 #
-#   scripts/agent-reconcile <workspace>        every session that has ended
-#   scripts/agent-reconcile <workspace>/<n>    that session
+#   agent-reconcile <workspace>        every session that has ended
+#   agent-reconcile <workspace>/<n>    that session
 #
 # Idempotent; never touches a session whose unit is still active. Exit 2 when
 # a session it was asked about is still active or its unit's result is gone.
 set -eu
 
-ref=${1:?usage: scripts/agent-reconcile <workspace>[/<n>]}
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-quadlet.sh"
-. "$root/scripts/lib/agent-runs.sh"
+ref=${1:?usage: agent-reconcile <workspace>[/<n>]}
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")
 only=$(ref_session "$ref")
 run="$(runs_dir)/$ws"

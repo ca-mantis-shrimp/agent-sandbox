@@ -1,15 +1,15 @@
 #!/bin/sh
 # Manifest fixtures only: no podman, model or systemd required.
 set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-runs.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-runs.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export AGENT_RUNS="$tmp/runs"
 mkdir -p "$AGENT_RUNS/ws/sessions"
 manifest="$AGENT_RUNS/ws/manifest.json"
 printf '{"state":"ready","landed":"yesterday","keep":{"value":1}}\n' >"$manifest"
-verdict="$root/scripts/agent-verdict"
+verdict="$tool/bin/agent-verdict"
 sh "$verdict" ws --agree --overrule 'false "alarm"' --overrule 'second' \
     --missed 'first miss' --missed 'second
 line' --note 'Human said: keep $behavior.' >"$tmp/out" 2>"$tmp/err"
@@ -49,12 +49,12 @@ human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
 [ ! -s "$tmp/reminder" ]
 printf '{"n":1,"read_only":true,"review":{"verdict":"land"}}\n' >"$AGENT_RUNS/ws/sessions/1.json"
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
-grep -qF 'scripts/agent-verdict ws' "$tmp/reminder"
+grep -qF 'agent-verdict ws' "$tmp/reminder"
 sh "$verdict" ws --agree >/dev/null 2>&1
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
 [ ! -s "$tmp/reminder" ]
 rm "$AGENT_RUNS/ws/sessions/1.json"
 printf '{"sessions":[{"review":{"unparsed":true}}]}\n' >"$manifest"
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
-grep -qF 'scripts/agent-verdict ws' "$tmp/reminder"
+grep -qF 'agent-verdict ws' "$tmp/reminder"
 echo 'agent-verdict.test > ok'

@@ -1,19 +1,21 @@
 #!/bin/sh
 #
-# Tests scripts/agent-land against a throwaway repo with one submodule: a red
+# Tests agent-land against a throwaway repo with one submodule: a red
 # gate moves no real branch, a moved branch stops the landing before anything
-# advances, and a green gate lands the merge with the right pin and cleans up.
-# Needs podman and the sandbox image (the fixture's Containerfile builds FROM
-# it, so nothing is pulled). Each assertion aborts the script under set -e, so
+# advances, a green gate lands the merge with the right pin and cleans up, and
+# a repo without submodules lands too.
+# Needs podman and a toolchain image to build the fixtures FROM (platform's by
+# default, so nothing is pulled; the sandbox's layer over it is cached after
+# the first landing). Each assertion aborts the script under set -e, so
 # reaching the final line is the pass.
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-base_image=${AGENT_LAND_TEST_IMAGE:-localhost/platform-agent}
-podman image exists "$base_image" || { echo "agent-land.test > no image $base_image; run scripts/agent-new once" >&2; exit 1; }
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+base_image=${AGENT_LAND_TEST_IMAGE:-localhost/platform-agent-toolchain}
+podman image exists "$base_image" || { echo "agent-land.test > no image $base_image; run agent-new once in platform" >&2; exit 1; }
 
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"; podman rmi -f fixture-agent:land-red >/dev/null 2>&1 || true' EXIT
+trap 'rm -rf "$tmp"; podman rmi -f fixture-agent:land-red fixture-agent:land-red-toolchain >/dev/null 2>&1 || true; podman volume rm -f agent-cache-landtest >/dev/null 2>&1 || true' EXIT
 export AGENT_RUNS="$tmp/runs" GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localhost \
     GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@localhost
 
@@ -38,14 +40,16 @@ commit "$tmp/sub-src" state start
 root="$tmp/fixture"
 git init -q -b main "$root"
 git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" sub
-mkdir -p "$root/scripts/lib" "$root/.sandbox"
-cp "$script_dir/agent-land" "$root/scripts/"
-cp -R "$script_dir/lib/." "$root/scripts/lib/"
-echo "FROM $base_image" >"$root/Containerfile"
-printf '#!/bin/sh\nexit 0\n' >"$root/.sandbox/gate"
-chmod +x "$root/.sandbox/gate"
-git -C "$root" add -A
-git -C "$root" commit -q -m fixture
+sandboxed() { # <repo>: the image, a cache volume, and the default gate, which passes when the volume is mounted
+    mkdir -p "$1/.sandbox"
+    echo "FROM $base_image" >"$1/Containerfile"
+    echo "landtest:/home/agent/landtest" >"$1/.sandbox/volumes"
+    printf '#!/bin/sh\ngrep -q " /home/agent/landtest " /proc/self/mountinfo\n' >"$1/.sandbox/gate"
+    chmod +x "$1/.sandbox/gate"
+    git -C "$1" add -A
+    git -C "$1" commit -q -m fixture
+}
+sandboxed "$root"
 git -C "$root/sub" switch -q main
 
 # A harvested workspace: branch agent/<id> in the root repo and the submodule.
@@ -57,8 +61,10 @@ workspace() { # <id>
     commit "$root" note "$1"
     git -C "$root" switch -q main
 }
+# Run from inside the fixture: a workspace without a manifest naming its repo
+# lands into the caller's checkout.
 land() { # <id> [gate]: agent-land's exit status
-    AGENT_LAND_GATE=${2:-.sandbox/gate} "$root/scripts/agent-land" "$1" >"$tmp/land.log" 2>&1
+    (cd "$root" && AGENT_LAND_GATE=${2:-.sandbox/gate} "$tool/bin/agent-land" "$1") >"$tmp/land.log" 2>&1
 }
 
 # --- a red gate moves no real branch ------------------------------------------
@@ -100,7 +106,7 @@ fails podman image exists fixture-agent:land-green
 # Only the root repo has commits, so harvest fetched nothing from sub and the
 # real sub has no agent/root-only branch.
 work="$AGENT_RUNS/root-only/work"
-(. "$script_dir/lib/agent-runs.sh" && clone_local "$root" "$work")
+(. "$tool/lib/agent-runs.sh" && clone_local "$root" "$work")
 git -C "$work" switch -q -c agent/root-only
 git -C "$work/sub" switch -q -c agent/root-only
 commit "$work" note root-only
@@ -119,7 +125,7 @@ land root-only
 
 workspace advisory
 mkdir -p "$AGENT_RUNS/advisory" "$tmp/bin"
-printf '{}\n' >"$AGENT_RUNS/advisory/manifest.json"
+jq -n --arg repo "$root" '{repo: $repo}' >"$AGENT_RUNS/advisory/manifest.json"
 real_jq=$(command -v jq)
 export real_jq
 # Fail only the advisory expressions; workspace loading and manifest updates
@@ -132,7 +138,8 @@ printf '%s\n' '#!/bin/sh' \
     'done' \
     'exec "$real_jq" "$@"' >"$tmp/bin/jq"
 chmod +x "$tmp/bin/jq"
-PATH="$tmp/bin:$PATH" land advisory
+# The manifest names the repo, so this lands from outside any checkout.
+(cd "$tmp" && PATH="$tmp/bin:$PATH" "$tool/bin/agent-land" advisory) >"$tmp/land.log" 2>&1
 grep -q 'warning: could not display blocking review findings' "$tmp/land.log"
 grep -q 'warning: could not display the human verdict reminder' "$tmp/land.log"
 [ "$(cat "$root/note")" = advisory ]
@@ -140,5 +147,18 @@ grep -q 'warning: could not display the human verdict reminder' "$tmp/land.log"
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
 [ ! -d "$AGENT_RUNS/advisory/candidate" ]
 jq -e '.landed != null and .gate.ok == true' "$AGENT_RUNS/advisory/manifest.json" >/dev/null
+
+# --- a repo without submodules lands the same way -----------------------------
+
+plain="$tmp/plain"
+git init -q -b main "$plain"
+sandboxed "$plain"
+git -C "$plain" switch -q -c agent/plain
+commit "$plain" note plain
+git -C "$plain" switch -q main
+(cd "$plain" && "$tool/bin/agent-land" plain) >"$tmp/land.log" 2>&1
+[ "$(cat "$plain/note")" = plain ]
+[ -z "$(git -C "$plain" status --porcelain)" ]
+fails git -C "$plain" rev-parse -q --verify refs/heads/agent/plain >/dev/null
 
 echo "agent-land.test > ok"

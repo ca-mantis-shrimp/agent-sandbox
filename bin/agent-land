@@ -3,14 +3,15 @@
 # Land a harvested workspace: merge branch agent/<id> into the checked-out
 # branch of every repo, bottom-up, gate the result, then delete the branch.
 #
-#   scripts/agent-land <id>
+#   agent-land <id>
 #
 # No real branch moves until the gate passes. The merge is built in a candidate
 # clone, $AGENT_RUNS/<id>/candidate: submodules merge first, then the root repo,
 # which pins each submodule at its merged HEAD. (Merging the root alone lets git
 # keep one side's pin and silently drop the other side's submodule work.) The
 # gate runs on the candidate in the sandbox image, built from the candidate's
-# own Containerfile, so every tool it needs is declared there: .sandbox/setup
+# own Containerfile (with the sandbox's layer over it), so every tool it needs
+# is declared there: .sandbox/setup
 # is sourced, then .sandbox/gate runs ($AGENT_LAND_GATE overrides it). Only
 # when it passes are the real branches fast-forwarded, submodules first.
 #
@@ -28,23 +29,24 @@
 # removed; its manifest, gate.log and transcripts stay as the record.
 set -eu
 
-id=${1:?usage: scripts/agent-land <id>}
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-runs.sh"
+id=${1:?usage: agent-land <id>}
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-runs.sh"
 branch="agent/$id"
 run="$(runs_dir)/$id"
+repo=$(workspace_repo "$run")
 cand="$run/candidate"
-image="$(basename "$root")-agent:land-$id"
+image="$(basename "$repo")-agent:land-$id"
 gate=${AGENT_LAND_GATE:-.sandbox/gate}
-submodules=$(git -C "$root" config --file "$root/.gitmodules" --get-regexp '\.path$' | awk '{print $2}')
+submodules=$(git -C "$repo" config --file "$repo/.gitmodules" --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
 
 say() { echo "agent-land > $*" >&2; }
 stop() {
     say "$*"
     exit 1
 }
-name() { # <repo path relative to root>
-    if [ "$1" = . ]; then basename "$root"; else printf '%s\n' "$1"; fi
+name() { # <repo path relative to the repo>
+    if [ "$1" = . ]; then basename "$repo"; else printf '%s\n' "$1"; fi
 }
 manifest() { # merge a jq expression into manifest.json, when the workspace has one
     [ -f "$run/manifest.json" ] || return 0
@@ -61,9 +63,9 @@ build_candidate() {
     [ -d "$cand" ] && return 0
     say "building the candidate in $cand"
     mkdir -p "$run"
-    clone_local "$root" "$cand"
+    clone_local "$repo" "$cand"
     for sm in . $submodules; do
-        real_branch=$(git -C "$root/$sm" symbolic-ref -q --short HEAD) ||
+        real_branch=$(git -C "$repo/$sm" symbolic-ref -q --short HEAD) ||
             stop "$(name "$sm") is on a detached HEAD; switch it to its default branch first"
         git -C "$cand/$sm" switch -q -C "$real_branch"
         git -C "$cand/$sm" update-ref refs/agent/land-base HEAD
@@ -75,11 +77,11 @@ build_candidate() {
 fetch_branch() {
     found=0
     for sm in . $submodules; do
-        git -C "$root/$sm" rev-parse -q --verify "refs/heads/$branch" >/dev/null || continue
-        git -C "$cand/$sm" fetch -q --no-recurse-submodules "$root/$sm" "+$branch:$branch"
+        git -C "$repo/$sm" rev-parse -q --verify "refs/heads/$branch" >/dev/null || continue
+        git -C "$cand/$sm" fetch -q --no-recurse-submodules "$repo/$sm" "+$branch:$branch"
         found=1
     done
-    [ "$found" -eq 1 ] || stop "no repo has $branch; harvest it first (scripts/agent-harvest $id)"
+    [ "$found" -eq 1 ] || stop "no repo has $branch; harvest it first (agent-harvest $id)"
 }
 
 # A workspace's clone may hold commits nobody harvested; landing without them
@@ -89,9 +91,9 @@ check_harvested() {
     [ -d "$run/work" ] || return 0
     for sm in . $submodules; do
         tip=$(git -C "$run/work/$sm" rev-parse -q --verify "refs/heads/$branch") || continue
-        git -C "$root/$sm" merge-base --is-ancestor "$tip" "$branch" 2>/dev/null ||
-            git -C "$root/$sm" merge-base --is-ancestor "$tip" HEAD 2>/dev/null ||
-            stop "$(name "$sm"): the workspace has commits on $branch that are not harvested; run scripts/agent-harvest $id"
+        git -C "$repo/$sm" merge-base --is-ancestor "$tip" "$branch" 2>/dev/null ||
+            git -C "$repo/$sm" merge-base --is-ancestor "$tip" HEAD 2>/dev/null ||
+            stop "$(name "$sm"): the workspace has commits on $branch that are not harvested; run agent-harvest $id"
     done
 }
 
@@ -114,7 +116,7 @@ merge_candidate() {
         fi
         # Pin every submodule at its merged HEAD.
         # shellcheck disable=SC2086
-        git add $submodules
+        [ -z "$submodules" ] || git add $submodules
         if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
             git commit -q --no-edit
         elif ! git diff --cached --quiet; then
@@ -127,11 +129,14 @@ gate_candidate() {
     say "gating the candidate: $gate in $image (log: $run/gate.log)"
     ok=true
     {
-        podman build -q -t "$image" "$cand" &&
-            podman run --rm --userns=keep-id --cpus 8 --memory 16g --memory-swap 16g \
-                -v "$cand:/job/land-$id/work" -w "/job/land-$id/work" \
-                -v agent-cargo:/home/agent/.cargo/registry \
-                -v agent-target:/home/agent/target \
+        # The same limits and cache volumes as a session; the volume list is
+        # validated to plain names and paths, so word splitting is safe.
+        memory=$(session_memory)
+        volumes=$(repo_volumes "$cand" | sed 's/^/-v /') &&
+        build_agent_image "$cand" "$image" &&
+            # shellcheck disable=SC2086
+            podman run --rm --userns=keep-id --cpus "$(session_cpus)" --memory "$memory" --memory-swap "$memory" \
+                -v "$cand:/job/land-$id/work" -w "/job/land-$id/work" $volumes \
                 "$image" sh -c '[ ! -f .sandbox/setup ] || . ./.sandbox/setup; exec "$0"' "$gate"
     } >"$run/gate.log" 2>&1 || ok=false
     manifest --arg at "$(date -Iseconds)" --argjson ok "$ok" '.gate = {at: $at, ok: $ok, log: "gate.log"}'
@@ -145,7 +150,7 @@ gate_candidate() {
 # the candidate (a rerun after a partial advance), before any of them moves.
 advance() {
     for sm in . $submodules; do
-        real=$(git -C "$root/$sm" rev-parse HEAD)
+        real=$(git -C "$repo/$sm" rev-parse HEAD)
         [ "$real" = "$(git -C "$cand/$sm" rev-parse refs/agent/land-base)" ] ||
             [ "$real" = "$(git -C "$cand/$sm" rev-parse HEAD)" ] ||
             stop "$(name "$sm") moved since the candidate was built; nothing advanced. Remove $cand and rerun"
@@ -153,9 +158,9 @@ advance() {
     advanced=""
     for sm in $submodules .; do
         tip=$(git -C "$cand/$sm" rev-parse HEAD)
-        [ "$(git -C "$root/$sm" rev-parse HEAD)" = "$tip" ] && continue
-        git -C "$root/$sm" fetch -q --no-recurse-submodules "$cand/$sm" "$(git -C "$cand/$sm" symbolic-ref HEAD)"
-        git -C "$root/$sm" merge --ff-only -q "$tip" ||
+        [ "$(git -C "$repo/$sm" rev-parse HEAD)" = "$tip" ] && continue
+        git -C "$repo/$sm" fetch -q --no-recurse-submodules "$cand/$sm" "$(git -C "$cand/$sm" symbolic-ref HEAD)"
+        git -C "$repo/$sm" merge --ff-only -q "$tip" ||
             stop "could not fast-forward $(name "$sm");${advanced:- nothing} advanced. Fix it and rerun"
         advanced="$advanced $(name "$sm")"
     done
@@ -163,10 +168,10 @@ advance() {
 
 cleanup() {
     for sm in . $submodules; do
-        git -C "$root/$sm" branch -q -d "$branch" 2>/dev/null || true
+        git -C "$repo/$sm" branch -q -d "$branch" 2>/dev/null || true
     done
     rm -rf "$run/work" "$cand"
-    podman rmi -f "$image" >/dev/null 2>&1 || true
+    podman rmi -f "$image" "$image-toolchain" >/dev/null 2>&1 || true
     manifest --arg at "$(date -Iseconds)" '.landed = $at'
 }
 
@@ -175,7 +180,7 @@ cleanup() {
 workspace='{}'
 if [ -f "$run/manifest.json" ]; then
     if workspace=$(workspace_json "$run"); then
-        printf '%s\n' "$workspace" | jq -r -L "$root/scripts/lib" '
+        printf '%s\n' "$workspace" | jq -r -L "$tool/lib" '
             include "agent-review"; blocking_review_lines' >&2 ||
             say "warning: could not display blocking review findings"
     else

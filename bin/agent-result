@@ -3,12 +3,12 @@
 # Print a workspace or one of its sessions as JSON: the contract every caller
 # reads, whichever harness it is.
 #
-#   scripts/agent-result <workspace> [--wait]       the manifest, all sessions
+#   agent-result <workspace> [--wait]       the manifest, all sessions
 #                                                   in order, and the commits
 #                                                   the workspace holds
-#   scripts/agent-result <workspace>/<n> [--wait]   that session's record
+#   agent-result <workspace>/<n> [--wait]   that session's record
 #
-# Sessions whose unit has stopped are finalized first (scripts/agent-reconcile),
+# Sessions whose unit has stopped are finalized first (agent-reconcile),
 # so their records carry a terminal state, outcome and commits. Without --wait
 # a session that is still going prints its record as it stands; with --wait
 # this blocks until it (or every session in the workspace) has stopped. Only
@@ -16,12 +16,12 @@
 # 3 still running or preparing.
 set -eu
 
-ref=${1:?usage: scripts/agent-result <workspace>[/<n>] [--wait]}
+ref=${1:?usage: agent-result <workspace>[/<n>] [--wait]}
 wait=0
 [ "${2:-}" = --wait ] && wait=1
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-quadlet.sh"
-. "$root/scripts/lib/agent-runs.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")
 n=$(ref_session "$ref")
 run="$(runs_dir)/$ws"
@@ -37,7 +37,7 @@ any_active() {
 if [ "$wait" -eq 1 ]; then
     while any_active; do sleep 2; done
 fi
-"$root/scripts/agent-reconcile" "$ws" >&2 || true
+"$tool/bin/agent-reconcile" "$ws" >&2 || true
 
 if [ -n "$n" ]; then
     json=$(session_json "$run" "$(cat "$run/sessions/$n.json")")

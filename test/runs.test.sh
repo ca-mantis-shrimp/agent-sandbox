@@ -1,13 +1,12 @@
 #!/bin/sh
 #
-# Tests scripts/lib/agent-runs.sh: references, and the workspace document that
+# Tests lib/agent-runs.sh: references, and the workspace document that
 # every reader goes through. No podman or systemd needed; each assertion
 # aborts the script under set -e, so reaching the final line is the pass.
 set -eu
 
-script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-root=$(CDPATH= cd -- "$script_dir/.." && pwd)
-. "$script_dir/lib/agent-runs.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-runs.sh"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
@@ -68,5 +67,27 @@ git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
 git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
 [ "$(repo_commits "$repo" refs/agent/base | jq -c '.["."] | length')" = 2 ]
 [ "$(repo_commits "$repo" refs/agent/missing)" = '{}' ]
+
+# --- repo_volumes: named cache volumes only ---------------------------------
+
+mkdir -p "$tmp/clone/.sandbox"
+[ -z "$(repo_volumes "$tmp/clone")" ]
+printf '# caches\ncargo:/home/agent/.cargo/registry\n\n  target:/home/agent/target  # build\n' \
+    >"$tmp/clone/.sandbox/volumes"
+[ "$(repo_volumes "$tmp/clone")" = "agent-cache-cargo:/home/agent/.cargo/registry
+agent-cache-target:/home/agent/target" ]
+# A host path, a relative path, a bare name, options and odd names all refuse.
+for bad in /home/me/.ssh:/x cargo:relative cargo cargo:/x:ro Cargo:/x -v:/x 'a b:/x' 'cargo:/x y'; do
+    printf '%s\n' "$bad" >"$tmp/clone/.sandbox/volumes"
+    if repo_volumes "$tmp/clone" >/dev/null 2>&1; then
+        echo "agent-runs.test > accepted volume line: $bad" >&2
+        exit 1
+    fi
+done
+
+# --- limits come from the host ----------------------------------------------
+
+[ "$(session_cpus)" = 8 ] && [ "$(session_memory)" = 16G ]
+[ "$(AGENT_CPUS=4 session_cpus)" = 4 ] && [ "$(AGENT_MEMORY=6G session_memory)" = 6G ]
 
 printf 'agent-runs tests passed\n'

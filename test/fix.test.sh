@@ -1,22 +1,22 @@
 #!/bin/sh
 # Fixture records and a stub launcher: no podman, systemd or model required.
 set -eu
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-mkdir -p "$tmp/tool/scripts/lib" "$tmp/runs/ws/sessions"
-cp "$root/scripts/agent-fix" "$tmp/tool/scripts/"
-cp "$root/scripts/lib/agent-runs.sh" "$root/scripts/lib/agent-review.jq" "$tmp/tool/scripts/lib/"
+mkdir -p "$tmp/tool/bin" "$tmp/tool/lib" "$tmp/runs/ws/sessions"
+cp "$tool/bin/agent-fix" "$tmp/tool/bin/"
+cp "$tool/lib/agent-runs.sh" "$tool/lib/agent-review.jq" "$tmp/tool/lib/"
 export AGENT_RUNS="$tmp/runs" CAPTURE="$tmp/capture"
-cat >"$tmp/tool/scripts/agent-run" <<'SH'
+cat >"$tmp/tool/bin/agent-run" <<'SH'
 #!/bin/sh
 set -eu
 jq -n --args '$ARGS.positional' -- "$@" >"$CAPTURE"
 printf 'ws/12\n'
 exit "${LAUNCH_STATUS:-0}"
 SH
-chmod +x "$tmp/tool/scripts/agent-run"
-fix="$tmp/tool/scripts/agent-fix"
+chmod +x "$tmp/tool/bin/agent-run"
+fix="$tmp/tool/bin/agent-fix"
 printf '{"state":"ready"}\n' >"$AGENT_RUNS/ws/manifest.json"
 report='{"coverage":[],"findings":[{"severity":"blocking","file":"a","line":1,"what":"bug with \"quotes\"","why":"breaks","reconciled":true},{"severity":"should-fix","file":null,"line":null,"what":"simplify","why":"duplication"},{"severity":"nit","what":"style","why":"readability"}],"for_human":["choose a policy"],"verdict":"land after fixes"}'
 record() { # n read-only report (JSON), stored directly
@@ -95,7 +95,7 @@ printf '%s\n' "$report" >"$tmp/review.json"
 (cd "$tmp"; sh "$fix" ws --review review.json --reviewer claude-opus-5-5 --nits --note note.txt >/dev/null)
 prompt=$(jq -r '.[3]' "$CAPTURE")
 printf '%s\n' "$prompt" | grep -qF 'in workspace ws (reviewer: claude-opus-5-5).'
-. "$root/scripts/lib/agent-runs.sh"
+. "$tool/lib/agent-runs.sh"
 workspace_json "$AGENT_RUNS/ws" | jq -e --argjson report "$report" '
     .reviews | length == 1 and .[0].review == $report and .[0].reviewer == "claude-opus-5-5"' >/dev/null
 refuse ws/11 --review "$tmp/review.json" --reviewer claude-opus-5-5

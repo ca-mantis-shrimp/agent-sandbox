@@ -1,7 +1,8 @@
-# Shared by the scripts/agent-* tools: where workspaces live and how their
+# Shared by the agent-* tools: where workspaces live and how their
 # records are read. repo_commits and clone_local use git; workspace_json and
-# running_sessions read records. session_json needs the caller's $root to locate
-# scripts/lib/agent-review.jq. Tests can source this without podman or systemd.
+# running_sessions read records. session_json and human_verdict_reminder need
+# the caller's $tool, the sandbox's own directory, to locate lib/agent-review.jq.
+# Tests can source this without podman or systemd.
 #
 # Three separate things, combined by whoever calls the tools:
 #
@@ -19,12 +20,63 @@
 session_json() { # <workspace-dir> <record-json>; read-only enrichment
     # Preserve the stored report, including human reconciliation. The workspace
     # argument is retained for callers; no transcript or clone is needed.
-    printf '%s\n' "$2" | jq -L "$root/scripts/lib" 'include "agent-review";
+    printf '%s\n' "$2" | jq -L "$tool/lib" 'include "agent-review";
         if .read_only == true and .review == null then . + {review: review_report} else . end'
 }
 
 runs_dir() {
     printf '%s\n' "${AGENT_RUNS:-$HOME/agent-runs}"
+}
+
+# Build the image sessions and gates run in, tagged <tag>: the repository's
+# own image from <context>/Containerfile (its tools, on any base, with git,
+# jq and npm), tagged <tag>-toolchain, then the sandbox's layer over it
+# (agents/Containerfile: the harnesses and the agent user). Needs $tool.
+build_agent_image() { # <context> <tag>
+    podman build -q -t "$2-toolchain" "$1" &&
+        podman build -q -t "$2" --build-arg "BASE=localhost/$2-toolchain" \
+            -f "$tool/agents/Containerfile" "$tool/agents"
+}
+
+# Per-session resource limits belong to the host, not the repository.
+session_cpus() {
+    printf '%s\n' "${AGENT_CPUS:-8}"
+}
+
+session_memory() {
+    printf '%s\n' "${AGENT_MEMORY:-16G}"
+}
+
+# The cache volumes a repository declares in <clone>/.sandbox/volumes, one
+# `name:/container/path` per line (# comments and blank lines allowed), printed
+# as `volume:/container/path`. A branch writes this file and the next session
+# mounts what it says, so only named volumes are allowed (a host path would
+# mount the host into the container), and each name gets the agent-cache-
+# prefix so a branch cannot reach the runner's own volumes (agent-pi holds
+# pi's login). Repositories that declare the same name share the volume.
+repo_volumes() { # <clone-dir>
+    [ -f "$1/.sandbox/volumes" ] || return 0
+    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$1/.sandbox/volumes" |
+        while IFS= read -r line; do
+            name=${line%%:*} path=${line#*:}
+            case "$name" in "" | [!a-z0-9]* | *[!a-z0-9_.-]*) name= ;; esac
+            case "$path" in /*) ;; *) path= ;; esac
+            case "$path" in *[!A-Za-z0-9_./-]*) path= ;; esac
+            if [ -z "$name" ] || [ -z "$path" ] || [ "$line" = "$path" ]; then
+                echo "agent-sandbox > .sandbox/volumes: not a named volume and an absolute path: $line" >&2
+                exit 1
+            fi
+            printf 'agent-cache-%s:%s\n' "$name" "$path"
+        done
+}
+
+# The repository a workspace works on: the checkout agent-new cloned, as its
+# manifest records. Workspaces from before the manifest recorded it, and
+# candidates without a manifest, use the caller's own checkout.
+workspace_repo() { # <workspace-dir>
+    repo=$(jq -r '.repo // empty' "$1/manifest.json" 2>/dev/null) || repo=
+    [ -n "$repo" ] || repo=$(git rev-parse --show-toplevel)
+    printf '%s\n' "$repo"
 }
 
 # A reference is <workspace> or <workspace>/<n>.
@@ -85,10 +137,10 @@ workspace_json() { # <workspace-dir>
 # Advisory after a successful landing. Accept the already-loaded workspace;
 # review reports may live in session files, external files or older inline records.
 human_verdict_reminder() { # <workspace-id> <workspace-json>
-    printf '%s\n' "$2" | jq -r -L "$root/scripts/lib" --arg ws "$1" '
+    printf '%s\n' "$2" | jq -r -L "$tool/lib" --arg ws "$1" '
         include "agent-review";
         select(.human_verdict == null and ([workspace_reviews] | length > 0))
-        | "agent-land > review has no human verdict; record the human’s call with scripts/agent-verdict \($ws)"' >&2
+        | "agent-land > review has no human verdict; record the human’s call with agent-verdict \($ws)"' >&2
 }
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules

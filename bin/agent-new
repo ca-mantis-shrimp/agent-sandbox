@@ -1,29 +1,33 @@
 #!/bin/sh
 #
-# Create a workspace for sandboxed agent sessions: a disposable clone of this
-# repo that any number of sessions, from any harness, can then work in.
+# Create a workspace for sandboxed agent sessions: a disposable clone of the
+# repository you run it in, which any number of sessions, from any harness,
+# can then work in.
 #
-#   scripts/agent-new      prints the workspace id on stdout; progress on stderr
+#   agent-new      prints the workspace id on stdout; progress on stderr
 #
 # The workspace is $AGENT_RUNS/<id>/ (default ~/agent-runs):
 #   work/          a clone of the repo at HEAD, every repo on branch agent/<id>
 #   agents/        the harness snapshot every session in it uses
-#   manifest.json  id, base commit, branch, state (preparing, ready or failed)
-#   sessions/, prompts/, transcripts/   filled by scripts/agent-run
+#   manifest.json  id, the repo it cloned, base commit, branch, state
+#                  (preparing, ready or failed)
+#   sessions/, prompts/, transcripts/   filled by agent-run
 #
-# Add sessions with scripts/agent-run --in <id>; bring its commits back with
-# scripts/agent-harvest <id>. The clone has no git credentials, so commits are
+# Add sessions with agent-run --in <id>; bring its commits back with
+# agent-harvest <id>. The clone has no git credentials, so commits are
 # a workspace's only output.
 #
-# Needs podman (the image is built from the repo's root Containerfile).
+# Needs podman. The image is the repo's root Containerfile with the sandbox's
+# layer over it (build_agent_image).
 set -eu
 
 say() { echo "agent-new > $*" >&2; }
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-runs.sh"
-# One image per repo, built from its root Containerfile.
-image="$(basename "$root")-agent"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-runs.sh"
+repo=$(git rev-parse --show-toplevel 2>/dev/null) || { say "run this inside a git repository"; exit 2; }
+# One image per repo.
+image="$(basename "$repo")-agent"
 runs=$(runs_dir)
 mkdir -p "$runs"
 # The id is a timestamp; mkdir claims it, so two launches in one second (agents
@@ -33,12 +37,12 @@ run="$runs/$id"
 branch="agent/$id"
 
 mkdir "$run/sessions" "$run/prompts" "$run/transcripts"
-cp -R "$root/agents" "$run/agents"
+cp -R "$tool/agents" "$run/agents"
 manifest() { # merge a jq expression into manifest.json
     jq "$@" "$run/manifest.json" >"$run/manifest.tmp" && mv "$run/manifest.tmp" "$run/manifest.json"
 }
-jq -n --arg id "$id" --arg base "$(git -C "$root" rev-parse HEAD)" --arg started "$(date -Iseconds)" \
-    '{id: $id, base: $base, branch: "agent/\($id)", state: "preparing", started: $started}' \
+jq -n --arg id "$id" --arg repo "$repo" --arg base "$(git -C "$repo" rev-parse HEAD)" --arg started "$(date -Iseconds)" \
+    '{id: $id, repo: $repo, base: $base, branch: "agent/\($id)", state: "preparing", started: $started}' \
     >"$run/manifest.json"
 
 # Keep a terminal record if any preparation step fails under `set -e`.
@@ -52,8 +56,8 @@ on_exit() {
 }
 trap on_exit EXIT
 
-say "cloning $(basename "$root") into $run/work"
-clone_local "$root" "$run/work"
+say "cloning $(basename "$repo") into $run/work"
+clone_local "$repo" "$run/work"
 cd "$run/work"
 # refs/agent/base marks where each repo started, so harvest counts exactly the
 # workspace's commits.
@@ -63,12 +67,15 @@ git submodule -q foreach "git switch -q -c $branch && git update-ref refs/agent/
 # pi reuses the host's user-level config, minus packages that break headless,
 # sandboxed runs: background tasks outlive the session, remote-pi opens a
 # control channel, pi-memory carries state between runs. Its login is the
-# sandbox's own, in the agent-pi volume, never the host's auth.json.
-jq '.packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-memory", "npm:pi-mcp-adapter"]' \
-    "$HOME/.pi/agent/settings.json" >"$run/pi-settings.json"
+# sandbox's own, in the agent-pi volume, never the host's auth.json. A host
+# without pi has no config to reuse; pi sessions then run on pi's defaults.
+pi_settings="$HOME/.pi/agent/settings.json"
+[ ! -f "$pi_settings" ] ||
+    jq 'if has("packages") then .packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-memory", "npm:pi-mcp-adapter"] else . end' \
+        "$pi_settings" >"$run/pi-settings.json"
 
 say "building image"
-if ! podman build -q -t "$image" "$root" >"$run/build.log" 2>&1; then
+if ! build_agent_image "$repo" "$image" >"$run/build.log" 2>&1; then
     say "image build failed; see $run/build.log"
     tail -n 20 "$run/build.log" >&2
     exit 1

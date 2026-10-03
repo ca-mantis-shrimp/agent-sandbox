@@ -1,10 +1,10 @@
 #!/bin/sh
 # Record the human's call, including after landing; no interactive prompts.
-# Usage: scripts/agent-verdict <workspace> [--agree] [--overrule <text>]...
+# Usage: agent-verdict <workspace> [--agree] [--overrule <text>]...
 #        [--missed <text>]... [--note <text>]
 set -eu
 say() { echo "agent-verdict > $*" >&2; }
-ws=${1:?usage: scripts/agent-verdict <workspace> [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]}
+ws=${1:?usage: agent-verdict <workspace> [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]}
 shift
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
 agree=false overruled='[]' missed='[]' note=''
@@ -23,8 +23,8 @@ while [ $# -gt 0 ]; do
         *) say "unknown argument: $1"; exit 2 ;;
     esac
 done
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-runs.sh"
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-runs.sh"
 run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
 tmp=$(mktemp "$run/manifest.verdict.XXXXXX")

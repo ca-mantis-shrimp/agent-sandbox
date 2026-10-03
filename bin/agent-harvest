@@ -1,31 +1,32 @@
 #!/bin/sh
 #
-# Bring a workspace's commits back into this checkout.
+# Bring a workspace's commits back into the checkout it was cloned from.
 #
-#   scripts/agent-harvest <workspace>
+#   agent-harvest <workspace>
 #
-# Fetches branch agent/<workspace> from its clone into this repo and into each
+# Fetches branch agent/<workspace> from its clone into that repo and into each
 # submodule, prints what each repo gained and what each session said, and marks
 # the workspace harvested. Nothing is merged, and the workspace stays usable:
 # review the branches, add more sessions and harvest again, or land them with
-# scripts/agent-land. Refuses while a session is still running in it.
+# agent-land. Refuses while a session is still running in it.
 set -eu
 
-id=${1:?usage: scripts/agent-harvest <id>}
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-. "$root/scripts/lib/agent-quadlet.sh"
-. "$root/scripts/lib/agent-runs.sh"
+id=${1:?usage: agent-harvest <id>}
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-runs.sh"
 run="$(runs_dir)/$id"
 branch="agent/$id"
 test -d "$run/work" || { echo "agent-harvest > no workspace at $run" >&2; exit 1; }
+repo=$(workspace_repo "$run")
 # Harvest what finished sessions left; a running one may still be committing.
-"$root/scripts/agent-reconcile" "$id" >&2 || true
+"$tool/bin/agent-reconcile" "$id" >&2 || true
 [ -z "$(running_sessions "$run")" ] ||
-    { echo "agent-harvest > a session is still running in $id; wait for it or scripts/agent-stop $id" >&2; exit 1; }
+    { echo "agent-harvest > a session is still running in $id; wait for it or agent-stop $id" >&2; exit 1; }
 
-harvest() { # <repo-dir-in-platform> <repo-dir-in-run>
-    name=${1#"$root"/}
-    [ "$1" = "$root" ] && name=platform
+harvest() { # <repo-dir> <repo-dir-in-run>
+    name=${1#"$repo"/}
+    [ "$1" = "$repo" ] && name=$(basename "$repo")
     # refs/agent/base is where agent-run started this repo.
     if [ "$(git -C "$2" rev-list --count "refs/agent/base..$branch")" -eq 0 ]; then
         printf 'agent-harvest > %s: no commits\n' "$name"
@@ -44,15 +45,15 @@ fetch() {
     git -C "$2" log --oneline "refs/agent/base..$branch" | sed 's/^/    /'
 }
 
-harvest "$root" "$run/work"
-git -C "$root" config --file .gitmodules --get-regexp '^submodule\..*\.path$' |
+harvest "$repo" "$run/work"
+git -C "$repo" config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
     while read -r _ path; do
-        harvest "$root/$path" "$run/work/$path"
+        harvest "$repo/$path" "$run/work/$path"
     done
 
 # Each session, in order: who worked, how it ended, what it said. (Manifests
 # from before sessions had their own records call the closing message "why".)
-workspace_json "$run" | jq -r -L "$root/scripts/lib" 'include "agent-review";
+workspace_json "$run" | jq -r -L "$tool/lib" 'include "agent-review";
     (.sessions[]? |
     "\nagent-harvest > \(.n // "") \(.model // "") \(.label // .action // "") \(if .action then .outcome elif .ok then "ok" else "not-ok" end) ($\(.cost_usd // 0))",
     (if .read_only then .review | review_lines else empty end),
@@ -61,4 +62,4 @@ workspace_json "$run" | jq -r -L "$root/scripts/lib" 'include "agent-review";
      (.review | review_lines))'
 jq --arg at "$(date -Iseconds)" '.harvested = $at' "$run/manifest.json" >"$run/manifest.tmp" &&
     mv "$run/manifest.tmp" "$run/manifest.json"
-printf '\nagent-harvest > review the branches, then land them with: scripts/agent-land %s\n' "$id"
+printf '\nagent-harvest > review the branches, then land them with: agent-land %s\n' "$id"
