@@ -12,12 +12,12 @@ One writer at a time per workspace; a writer excludes readers. Read-only session
 
 ## Install
 
-```sh
-git clone <this repository> ~/Products/agent-sandbox   # or check out a tag to pin a version
-~/Products/agent-sandbox/install.sh
-```
+There is no install step. The sandbox runs from its own checkout, so installing it is a declaration, kept wherever your environment is declared (a shell profile, a dotfiles manager such as chezmoi, a Nix or distribution package):
 
-`install.sh` links each command in `bin/` into `${PREFIX:-~/.local}/bin`, which is on `PATH` in most Linux sessions, and reports what the host still lacks. It installs nothing else, so a host with a read-only `/usr` is fine. The links point into the checkout: `git pull` updates the commands, and a workspace keeps the harness snapshot it started with. The commands find `lib/` and `agents/` through their links, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
+- this repository, checked out at a pinned revision or tag;
+- its `bin/` on `PATH`, directly or through symlinks.
+
+Updating is moving that pin. A workspace keeps the harness snapshot it started with. The commands find `lib/` and `agents/` beside the real `bin/`, through any symlink, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
 
 ## Host setup
 
@@ -29,7 +29,7 @@ The host provides, once:
 - The `claude_token` Podman secret for Claude sessions: `claude setup-token`, then `podman secret create claude_token -` with the token on stdin.
 - For pi sessions, the sandbox's own pi login in the `agent-pi` volume, never the host's `auth.json`: log in once with `podman run --rm -it --userns=keep-id -v agent-pi:/home/agent/.pi/agent localhost/<repo>-agent pi`, then `/login`. The host's `~/.pi/agent/settings.json` is reused when there is one.
 
-Rerun `install.sh` to check them. Images need nothing installed: `agent-new` builds them per repository.
+`agent-doctor` checks them, one line each, and changes nothing. Images need nothing installed: `agent-new` builds them per repository.
 
 The image is built in two layers. The target repository's root `Containerfile` comes first: built as root, on any base, it installs the tools that repository needs and must also provide `git`, `jq` and `npm`. The sandbox's `agents/Containerfile` goes over it, adding the harnesses (and their version pins) and the uid-1000 user sessions run as, whose home is `/home/agent`. Tools live in the image.
 
@@ -69,6 +69,7 @@ Run these from the host, not inside an agent container.
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
 | see workspaces or recent tool calls | `agent-status [<workspace> [n]]` |
+| check this host's setup | `agent-doctor` |
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
 
