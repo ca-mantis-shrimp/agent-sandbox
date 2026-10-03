@@ -94,6 +94,16 @@ Limits: `AGENT_SESSION_USD` defaults to $3 per session; `AGENT_RUN_DEADLINE_SEC`
 
 A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate, retaining records and transcripts.
 
+## Unattended runs
+
+A session is a systemd user unit, so it outlives the terminal that started it. What starts sessions must outlive it too: run the driver (a project's queue runner, or a script of `agent-run --wait` calls) under the systemd user manager, with `systemd-run --user --unit=<name> <driver>` once or a user timer on a schedule, not in a terminal. The host then needs:
+
+- lingering (`loginctl enable-linger`), so the user manager runs without a login and starts at boot;
+- `agent-run` on the user manager's `PATH`, which is not your shell's: declare it in `~/.config/environment.d/` (for example `PATH=${HOME}/Products/agent-sandbox/bin:${PATH}`);
+- a machine that stays awake.
+
+`agent-doctor` checks the first two. Spending stays bounded by `AGENT_SESSION_USD` per session and by the driver's own cap, and results wait in the records for `agent-result` and `agent-harvest`.
+
 ## Tests
 
 `test/*.test.sh` run with `sh`; each passes by reaching its last line. `land.test.sh` needs Podman and a base image (`AGENT_LAND_TEST_IMAGE`).

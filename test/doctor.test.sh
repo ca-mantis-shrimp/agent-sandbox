@@ -17,7 +17,7 @@ AGENT_RUNS="$tmp/runs" "$tmp/links/agent-status"
 
 # A PATH with everything the doctor uses except podman.
 mkdir "$tmp/path"
-for cmd in id git jq flock systemctl grep sort loginctl; do
+for cmd in id git jq flock systemctl grep sed sort loginctl; do
     ln -s "$(command -v "$cmd")" "$tmp/path/$cmd"
 done
 if PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out"; then

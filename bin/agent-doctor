@@ -6,8 +6,8 @@
 #   agent-doctor
 #
 # Exit 0 when every required check passes, 1 otherwise. Notes (credentials a
-# harness needs, lingering) are reported but do not fail it: a host may use
-# only one harness, or run sessions only while logged in.
+# harness needs, what unattended runs need) are reported but do not fail it: a
+# host may use only one harness, or run sessions only while someone watches.
 set -u
 
 failed=0
@@ -48,6 +48,15 @@ if command -v podman >/dev/null; then
     else
         note "no pi login in the agent-pi volume: pi sessions cannot start (README.md, Host setup)"
     fi
+fi
+
+# Unattended drivers (systemd-run --user, timers) run under the user manager,
+# whose PATH is not your shell's.
+manager_path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p')
+if [ -n "$manager_path" ] && (PATH=$manager_path; command -v agent-run >/dev/null); then
+    ok "the systemd user manager finds agent-run"
+else
+    note "the systemd user manager's PATH lacks agent-run: unattended drivers cannot start sessions (README.md, Unattended runs)"
 fi
 
 if [ "$(loginctl show-user "$user" -p Linger --value 2>/dev/null)" = yes ]; then
