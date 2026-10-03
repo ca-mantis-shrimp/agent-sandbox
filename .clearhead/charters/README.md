@@ -23,11 +23,13 @@ ClearHead is aware of everyone; nobody is aware of ClearHead. Charters and actio
 
 | Layer | Knows about | Owns |
 | --- | --- | --- |
-| sandbox | git, podman, harnesses | clone, container, harness adapters, manifest, telemetry |
-| ClearHead driver | sandbox, ClearHead | queue loop, prompt, completed/blocked/unfinished |
+| host | the sandbox, by `PATH` | podman, lingering, the user manager's `PATH`, credentials, timers: when things run |
+| sandbox | git, podman, harnesses | clone, container, harness layer and adapters, manifest, telemetry |
+| project | the sandbox, through `.sandbox/` | its image, setup, gate, cache volumes, driver: what runs |
+| ClearHead driver (platform's) | sandbox, ClearHead | queue loop, prompt, completed/blocked/unfinished |
 | ClearHead data model | whatever it links to | an action points at the commits a run produced |
 
-So the sandbox works on any repo with a root `Containerfile`, with or without a `.clearhead/`.
+Many hosts and many projects use the same sandbox, each declaring its own part its own way (decided with the human, 2026-10-03); the sandbox knows none of them. So it works on any repo with a root `Containerfile`, with or without a `.clearhead/`, on any host that `agent-doctor` passes.
 
 ## Flow
 
