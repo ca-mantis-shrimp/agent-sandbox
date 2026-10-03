@@ -14,7 +14,7 @@ One writer at a time per workspace; a writer excludes readers. Read-only session
 
 There is no install step. The sandbox runs from its own checkout, so installing it is a declaration, kept wherever your environment is declared (a shell profile, a dotfiles manager such as chezmoi, a Nix or distribution package):
 
-- this repository, checked out at a pinned revision or tag;
+- this repository (`https://github.com/ca-mantis-shrimp/agent-sandbox`), checked out at a pinned revision or tag;
 - its `bin/` on `PATH`, directly or through symlinks.
 
 Updating is moving that pin. A workspace keeps the harness snapshot it started with. The commands find `lib/` and `agents/` beside the real `bin/`, through any symlink, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
@@ -116,4 +116,4 @@ A session is a systemd user unit, so it outlives the terminal that started it. W
 - Headless `nvim`/`busted` can hang on inherited open stdin; append `< /dev/null`.
 - Sourcing `lib/*.sh` into zsh breaks because `path` is zsh's PATH; use `sh -c`.
 
-Current implementation state, open gaps and decisions belong in [the sandbox charter](../.clearhead/charters/agent-sandbox.md), not this guide.
+Current implementation state, open gaps and decisions belong in [the sandbox charter](.clearhead/charters/README.md), not this guide.
