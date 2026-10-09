@@ -11,11 +11,15 @@
 #   work/        the clone the agent works in
 #   home/        the agent's home for this workspace
 #   cache        optional link to the repository's cache, shared by its
-#                workspaces and mounted at /cache; .sandbox/setup points
-#                its tools there
+#                workspaces and mounted at /srv/cache; .sandbox/setup
+#                points its tools there
 #   review/work  link to ../work, present only for a read-only session
-#   pi/          optional per-run pi settings.json and agents/
+#   pi/          pi's directory for this run (PI_CODING_AGENT_DIR): its
+#                settings.json and agents/, and auth.json linking to the
+#                shared login at /srv/pi-login/auth.json
 # Shared by every run: /var/lib/agent-runs/.pi, pi's login.
+# Inside, the run directory is /srv/job/%i. Every mount point sits on a tmpfs
+# (/srv, /home), since systemd creates missing ones on the real disk.
 # Limits are defaults; override one run with `systemctl set-property`.
 [Unit]
 Description=agent session in workspace %i
@@ -30,25 +34,24 @@ UMask=0002
 RootDirectory=/var/lib/agent-runs/%i/root
 ExtensionImages=-/var/lib/agent-runs/%i/layers/harness.raw -/var/lib/agent-runs/%i/layers/harness-etc.raw
 ExtensionImages=-/var/lib/agent-runs/%i/layers/project.raw -/var/lib/agent-runs/%i/layers/project-etc.raw
-BindPaths=/var/lib/agent-runs/%i:/job/%i
-BindReadOnlyPaths=-/var/lib/agent-runs/%i/review/work:/job/%i/work
-BindReadOnlyPaths=/var/lib/agent-runs/%i/agents:/agents
+TemporaryFileSystem=/srv /home
+BindPaths=/var/lib/agent-runs/%i:/srv/job/%i
+BindReadOnlyPaths=-/var/lib/agent-runs/%i/review/work:/srv/job/%i/work
+BindReadOnlyPaths=/var/lib/agent-runs/%i/agents:/srv/agents
 BindReadOnlyPaths=/run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
 BindPaths=/var/lib/agent-runs/%i/home:/home/agent
-BindPaths=-/var/lib/agent-runs/%i/cache:/cache
-BindPaths=-/var/lib/agent-runs/.pi:/home/agent/.pi/agent
-BindReadOnlyPaths=-/var/lib/agent-runs/%i/pi/settings.json:/home/agent/.pi/agent/settings.json
-BindReadOnlyPaths=-/var/lib/agent-runs/%i/pi/agents:/home/agent/.pi/agent/agents
+BindPaths=-/var/lib/agent-runs/%i/cache:/srv/cache
+BindPaths=/var/lib/agent-runs/.pi:/srv/pi-login
 EnvironmentFile=/var/lib/agent-runs/%i/run.env
-Environment=AGENT_JOB=/job/%i HOME=/home/agent
+Environment=AGENT_JOB=/srv/job/%i HOME=/home/agent PI_CODING_AGENT_DIR=/srv/job/%i/pi
 # Git trusts the clone, which the person owns, and commits as the agent. Layers
 # cannot carry /etc/gitconfig (extensions cover /usr and /opt only).
 Environment=GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=*
 Environment=GIT_CONFIG_KEY_1=user.name GIT_CONFIG_VALUE_1=agent
 Environment=GIT_CONFIG_KEY_2=user.email GIT_CONFIG_VALUE_2=agent@localhost
 ImportCredential=agent.*
-WorkingDirectory=/job/%i/work
-ExecStart=/agents/session ${AGENT_SESSION}
+WorkingDirectory=/srv/job/%i/work
+ExecStart=/srv/agents/session ${AGENT_SESSION}
 
 # Isolation: the tree is read-only, the host's loopback and LAN are out of
 # reach except systemd-resolved's stub for DNS, and nothing escalates.
