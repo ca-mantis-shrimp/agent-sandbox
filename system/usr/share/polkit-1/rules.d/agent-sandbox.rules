@@ -1,0 +1,8 @@
+// Members of the agents group may start and stop agent sessions, and only those.
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        /^agent@[A-Za-z0-9_.-]+\.service$/.test(action.lookup("unit") || "") &&
+        subject.isInGroup("agents")) {
+        return polkit.Result.YES;
+    }
+});
