@@ -106,10 +106,29 @@ printf '%s\n' '#!/bin/sh' \
 chmod +x "$tmp/bin/flock"
 git init -q "$run/work"
 git -C "$run/work" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
-jq -n '{state:"ready", repo:"/repo/example"}' >"$run/manifest.json"
+# agent-layer is stubbed in a copy of the tool: it logs slot, name and recipe contents.
+real=$tool tool=$tmp/tool
+mkdir -p "$tool" && cp -R "$real/bin" "$real/lib" "$real/agents" "$tool/" && mkdir -p "$tool/layers"
+printf '%s\n' '#!/bin/sh' 'echo "$1 $2 $3 $(cat "$3/mkosi.conf" 2>/dev/null)" >>"$LAYER_LOG"' \
+    'printf "{\"name\":\"%s\"}\n" "$2" >"$AGENT_LAYERS/$2.build.json"' >"$tool/bin/agent-layer"
+chmod +x "$tool/bin/agent-layer"
+export LAYER_LOG="$tmp/layer-log"
+# The real repository commits a project recipe; the clone's copy differs and must be ignored.
+repo="$tmp/example"
+git init -q "$repo"
+mkdir -p "$repo/.sandbox/layer"
+echo committed >"$repo/.sandbox/layer/mkosi.conf"
+git -C "$repo" add -A
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m base
+mkdir -p "$run/work/.sandbox/layer"
+echo tampered >"$run/work/.sandbox/layer/mkosi.conf"
+jq -n --arg repo "$repo" --arg base "$(git -C "$repo" rev-parse HEAD)" '{state:"ready", repo:$repo, base:$base}' >"$run/manifest.json"
 echo inactive >"$SYSTEMCTL_STATE"
 [ "$("$tool/bin/agent-run" --in ws --harness claude --prompt review --read-only)" = ws/1 ]
 [ -L "$run/review/work" ]
+[ "$(sed -n 1p "$LAYER_LOG")" = "harness harness $tool/layers/harness " ]
+sed -n 2p "$LAYER_LOG" | grep -q '^project example /.*/\.sandbox/layer committed$'
+jq -e '.layers == {harness: {name: "harness"}, project: {name: "example"}}' "$run/sessions/1.json" >/dev/null
 [ ! -e "$tmp/models-executed" ] && [ ! -e "$tmp/env-executed" ]
 . "$tool/agents/models.env"
 jq -e --arg model "$AGENT_CLAUDE_MODEL" '.model == $model' "$run/sessions/1.json" >/dev/null

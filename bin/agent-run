@@ -45,7 +45,11 @@ fi
 AGENT_WORKSPACE_LOCKED=$ws "$tool/bin/agent-reconcile" "$ws" >&2
 [ -z "$(running_sessions "$run")" ] || { say "unreconciled session in $ws"; exit 1; }
 n=$(($(find "$run/sessions" -name '*.json' | wc -l) + 1))
-write_agent_run "$run" "$(workspace_repo "$run")" "$harness" "$model" "$n" "$readonly"
+repo=$(workspace_repo "$run")
+ensure_layers "$run" "$repo" >&2
+hold_layers "$repo" || { say "could not lock the layers"; exit 1; }
+layers=$(layers_json "$repo")
+write_agent_run "$run" "$repo" "$harness" "$model" "$n" "$readonly"
 printf '%s\n' "$prompt_text" >"$run/prompts/$n.md"
 (
     cd "$run/work"
@@ -53,8 +57,8 @@ printf '%s\n' "$prompt_text" >"$run/prompts/$n.md"
     git submodule -q foreach --recursive "git update-ref refs/agent/session-$n HEAD"
 )
 jq -n --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model "$model" \
-    --argjson ro "$readonly" --arg started "$(date -Iseconds)" \
-    '{n: $n, label: $label, harness: $harness, model: $model, read_only: $ro,
+    --argjson ro "$readonly" --argjson layers "$layers" --arg started "$(date -Iseconds)" \
+    '{n: $n, label: $label, harness: $harness, model: $model, read_only: $ro, layers: $layers,
       prompt: "prompts/\($n).md", state: "running", started: $started}' \
     >"$run/sessions/$n.json"
 say "session $ws/$n: $harness $model as $unit (transcripts in $run/transcripts/)"
@@ -72,6 +76,7 @@ if [ "$start_status" -ne 0 ]; then
     fi
     exit "$start_status"
 fi
+release_layers
 flock -u 9
 status=0
 if [ "$wait" -eq 1 ]; then

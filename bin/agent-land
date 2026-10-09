@@ -147,11 +147,17 @@ gate_candidate() {
         if [ -d "$run/agents" ]; then cp -R "$run/agents" "$gate_run/agents"
         else cp -R "$tool/agents" "$gate_run/agents"; fi
     fi
+    ensure_layers "$run" "$repo" >&2 || stop "could not build the layers for the gate"
+    hold_layers "$repo" || stop "could not lock the layers for the gate"
+    layers=$(layers_json "$repo")
     write_agent_run "$gate_run" "$repo" gate "" 0 false
     rm -f "$gate_run/gate.status"
     : >"$gate_run/gate.log"
     ok=false
-    if systemctl --no-ask-password start "$unit"; then
+    started=false
+    ! systemctl --no-ask-password start "$unit" || started=true
+    release_layers
+    if [ "$started" = true ]; then
         while agent_unit_active "$gate_ws"; do sleep 2; done
         props=$(agent_unit_props "$gate_ws")
         result=$(printf '%s\n' "$props" | sed -n 's/^Result=//p')
@@ -161,7 +167,8 @@ gate_candidate() {
         [ "$outcome" != finished ] || [ "$(cat "$gate_run/gate.status" 2>/dev/null)" != 0 ] || ok=true
     fi
     cp "$gate_run/gate.log" "$run/gate.log"
-    manifest --arg at "$(date -Iseconds)" --argjson ok "$ok" '.gate = {at: $at, ok: $ok, log: "gate.log"}'
+    manifest --arg at "$(date -Iseconds)" --argjson ok "$ok" --argjson layers "$layers" \
+        '.gate = {at: $at, ok: $ok, log: "gate.log", layers: $layers}'
     [ "$ok" = true ] || {
         tail -n 20 "$run/gate.log" >&2
         stop "the gate failed; no real branch moved. Evidence: $run/gate.log and $cand"

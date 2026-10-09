@@ -20,6 +20,11 @@ printf '%s\n' '#!/bin/sh' \
     'case "$*" in' \
     '  *"-p ActiveState --value") echo inactive ;;' \
     '  "--no-ask-password start "*)' \
+    '    for l in "$AGENT_LAYERS"/.build/*.lock; do' \
+    '      if flock -n -x "$l" true; then echo "free $l"; else echo "held $l"; fi' \
+    '    done >>"$LOCK_LOG"' \
+    '    gl="$XDG_RUNTIME_DIR/agent-sandbox/${3#agent@}"; gl=${gl%.service}.lock' \
+    '    if flock -n -x "$gl" true; then echo "free $gl"; else echo "held $gl"; fi >>"$GATE_LOG"' \
     '    ws=${3#agent@}; ws=${ws%.service}' \
     '    AGENT_JOB="$AGENT_RUNS/$ws"; export AGENT_JOB' \
     '    set -a; . "$AGENT_JOB/run.env"; set +a' \
@@ -32,7 +37,26 @@ printf '%s\n' '#!/bin/sh' \
     '  *) exit 1 ;;' \
     'esac' >"$tmp/bin/systemctl"
 chmod +x "$tmp/bin/systemctl"
+# The candidate workspace lock must also be held while landing cleans up.
+real_git=$(command -v git)
+printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  *"branch -q -d"*)' \
+    '    gl="$XDG_RUNTIME_DIR/agent-sandbox/land-green.lock"' \
+    '    if [ -f "$gl" ]; then' \
+    '      if flock -n -x "$gl" true; then echo "free cleanup" >>"$GATE_LOG"; else echo "held cleanup" >>"$GATE_LOG"; fi' \
+    '    fi ;;' \
+    'esac' \
+    "exec $real_git \"\$@\"" >"$tmp/bin/git"
+chmod +x "$tmp/bin/git"
 export PATH="$tmp/bin:$PATH"
+# agent-layer is stubbed in a copy of the tool: the gate must never build real layers.
+real=$tool tool=$tmp/tool
+mkdir -p "$tool" && cp -R "$real/bin" "$real/lib" "$real/agents" "$tool/"
+printf '%s\n' '#!/bin/sh' 'echo "$1 $2 $3 $(cat "$3/mkosi.conf" 2>/dev/null)" >>"$LAYER_LOG"' \
+    'printf "{\"name\":\"%s\"}\n" "$2" >"$AGENT_LAYERS/$2.build.json"' >"$tool/bin/agent-layer"
+chmod +x "$tool/bin/agent-layer"
+export LAYER_LOG="$tmp/layer-log" LOCK_LOG="$tmp/lock-log" GATE_LOG="$tmp/gate-log"
 
 commit() { # <repo> <file> <content>
     printf '%s\n' "$3" >"$1/$2"
@@ -105,20 +129,36 @@ grep -q "moved since the candidate was built" "$tmp/land.log"
 workspace green
 # An agent holding either legacy lock cannot prevent host landing.
 mkdir -p "$AGENT_RUNS/green" "$AGENT_RUNS/land-green"
-exec 7>"$AGENT_RUNS/green/.lock"
-exec 6>"$AGENT_RUNS/land-green/.lock"
-flock 7
-flock 6
+exec 3>"$AGENT_RUNS/green/.lock"
+exec 4>"$AGENT_RUNS/land-green/.lock"
+flock 3
+flock 4
+: >"$LAYER_LOG"
+: >"$LOCK_LOG"
+: >"$GATE_LOG"
+# An image without a build record is still mounted, so its lock is still held.
+touch "$AGENT_LAYERS/$(basename "$root").raw"
 land green
 [ -f "$XDG_RUNTIME_DIR/agent-sandbox/green.lock" ]
 [ -f "$XDG_RUNTIME_DIR/agent-sandbox/land-green.lock" ]
-flock -u 7
-flock -u 6
+flock -u 3
+flock -u 4
 sub_head=$(head_of "$root/sub")
 fails git -C "$root/sub" merge-base --is-ancestor agent/red HEAD
 [ "$(cat "$root/sub/state")" = green ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$sub_head" ]
 [ "$(cat "$root/note")" = green ]
+# No recipe at the base commit: harness only, and the gate records the builds it ran on.
+[ "$(cat "$LAYER_LOG")" = "harness harness $tool/layers/harness " ]
+# The layers' shared lock was held while the unit started, and is released after.
+[ "$(sort "$LOCK_LOG")" = "held $AGENT_LAYERS/.build/$(basename "$root").lock
+held $AGENT_LAYERS/.build/harness.lock" ]
+flock -n -x "$AGENT_LAYERS/.build/harness.lock" true
+flock -n -x "$AGENT_LAYERS/.build/$(basename "$root").lock" true
+# The candidate's workspace lock stayed held through unit start and landing cleanup.
+grep -qx "held $XDG_RUNTIME_DIR/agent-sandbox/land-green.lock" "$GATE_LOG"
+grep -qx 'held cleanup' "$GATE_LOG"
+! grep -q '^free' "$GATE_LOG"
 [ -z "$(git -C "$root" status --porcelain)" ]
 fails git -C "$root" rev-parse -q --verify refs/heads/agent/green >/dev/null
 fails git -C "$root/sub" rev-parse -q --verify refs/heads/agent/green >/dev/null
@@ -169,17 +209,25 @@ grep -q 'warning: could not display the human verdict reminder' "$tmp/land.log"
 [ "$(cat "$root/sub/state")" = advisory ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
 [ ! -d "$AGENT_RUNS/land-advisory/work" ]
-jq -e '.landed != null and .gate.ok == true' "$AGENT_RUNS/advisory/manifest.json" >/dev/null
+jq -e '.landed != null and .gate.ok == true
+    and .gate.layers == {harness: {name: "harness"}, project: null}' "$AGENT_RUNS/advisory/manifest.json" >/dev/null
 
 # --- a repo without submodules lands the same way -----------------------------
 
 plain="$tmp/plain"
 git init -q -b main "$plain"
 sandboxed "$plain"
+mkdir -p "$plain/.sandbox/layer"
+echo plainrecipe >"$plain/.sandbox/layer/mkosi.conf"
+git -C "$plain" add -A
+git -C "$plain" commit -q -m recipe
 git -C "$plain" switch -q -c agent/plain
 commit "$plain" note plain
 git -C "$plain" switch -q main
+: >"$LAYER_LOG"
 (cd "$plain" && "$tool/bin/agent-land" plain) >"$tmp/land.log" 2>&1
+[ "$(sed -n 1p "$LAYER_LOG")" = "harness harness $tool/layers/harness " ]
+sed -n 2p "$LAYER_LOG" | grep -q '^project plain /.*/\.sandbox/layer plainrecipe$'
 [ "$(cat "$plain/note")" = plain ]
 [ -z "$(git -C "$plain" status --porcelain)" ]
 fails git -C "$plain" rev-parse -q --verify refs/heads/agent/plain >/dev/null
