@@ -6,6 +6,8 @@
 # records what it installed in $AGENT_LAYERS/<name>.build.json.
 # TRUST: the recipe runs with network on the host (in a user namespace). Pass only a
 # trusted, committed recipe.
+# mkosi and systemd-repart output goes to $AGENT_LAYERS/.build/<name>.log. A rebuild that
+# is due only by age and fails keeps the old images, warns and exits 0.
 # Needs AGENT_BASE (a directory tree) and AGENT_LAYERS. <slot> is harness or project.
 set -eu
 die() { echo "agent-layer > $*" >&2; exit 1; }
@@ -35,25 +37,45 @@ level=$(os_var SYSEXT_LEVEL)
 now=$(date +%s)
 
 record=$AGENT_LAYERS/$name.build.json
-reason=
-if [ "$force" = true ]; then reason=forced
-elif [ ! -f "$record" ] || [ ! -f "$AGENT_LAYERS/$name.raw" ] || [ ! -f "$AGENT_LAYERS/$name-etc.raw" ]; then reason='no record'
-elif [ "$(jq -r .slot "$record")" != "$slot" ]; then reason='slot changed'
-elif [ "$(jq -r .recipe_id "$record")" != "$recipe_id" ]; then reason='recipe changed'
-elif [ "$(jq -r .base_id "$record")" != "$base_id" ]; then reason='base changed'
-elif [ $((now - $(jq -r .built_epoch "$record"))) -gt "$max_age" ]; then reason="older than $((max_age / 86400))d"
-fi
-if [ -z "$reason" ]; then
-    echo "agent-layer > $name up to date (built $(jq -r '.built_at[:16]' "$record"))"
-    exit 0
-fi
+span() { # <seconds>: in the largest whole unit that divides it
+    for u in d:86400 h:3600 m:60; do
+        [ $(($1 % ${u#*:})) -ne 0 ] || [ "$1" -eq 0 ] || { echo "$(($1 / ${u#*:}))${u%:*}"; return; }
+    done
+    echo "$1s"
+}
+stale() { # sets $reason, empty when the layer is current
+    reason=
+    if [ "$force" = true ]; then reason=forced
+    elif [ ! -f "$record" ] || [ ! -f "$AGENT_LAYERS/$name.raw" ] || [ ! -f "$AGENT_LAYERS/$name-etc.raw" ]; then reason='no record'
+    elif [ "$(jq -r .slot "$record")" != "$slot" ]; then reason='slot changed'
+    elif [ "$(jq -r .recipe_id "$record")" != "$recipe_id" ]; then reason='recipe changed'
+    elif [ "$(jq -r .base_id "$record")" != "$base_id" ]; then reason='base changed'
+    elif [ $((now - $(jq -r .built_epoch "$record"))) -gt "$max_age" ]; then reason="older than $(span "$max_age")"
+    fi
+}
+current() { echo "agent-layer > $name up to date (built $(jq -r '.built_at[:16]' "$record"))"; exit 0; }
+stale
+[ -n "$reason" ] || current
 echo "agent-layer > building $name: $reason"
 
 b=$AGENT_LAYERS/.build/$name
 mkdir -p "$AGENT_LAYERS/.build"
 exec 9>"$AGENT_LAYERS/.build/$name.lock"
 flock 9
-fail() { rm -f "$AGENT_LAYERS"/.$name*.new; die "$* (evidence kept in $b)"; }
+# Two runs may have seen the layer stale; the one that waited finds it built.
+stale
+[ -n "$reason" ] || current
+log=$AGENT_LAYERS/.build/$name.log
+: >"$log"
+fail() {
+    rm -f "$AGENT_LAYERS"/.$name*.new
+    # Age alone is a soft trigger: keep working on the old images (offline machines).
+    case "$reason" in 'older than'*)
+        echo "agent-layer > WARNING: rebuilding $name failed ($log); using the build from $(jq -r '.built_at[:10]' "$record")" >&2
+        exit 0 ;;
+    esac
+    die "$* (log: $log; evidence kept in $b)"
+}
 rmtree "$b"; mkdir -p "$b/tmp" "$b/out"
 cp -a "$recipe" "$b/recipe"
 extra=$b/recipe/mkosi.extra
@@ -77,7 +99,7 @@ fi
 export TMPDIR=$b/tmp
 unshare -rm mkosi -C "$b/recipe" --base-tree="$AGENT_BASE" --format=directory --overlay=yes \
     --snapshot="$snapshot" "$tools_arg" --output="$name" --output-directory="$b/out" \
-    --workspace-directory="$b/tmp" --manifest-format=json build || fail 'mkosi failed'
+    --workspace-directory="$b/tmp" --manifest-format=json build >>"$log" 2>&1 || fail 'mkosi failed'
 if [ -z "$tools" ] && [ -d "$b/recipe/mkosi.tools" ]; then
     dest=$AGENT_LAYERS/.tools/$level
     mkdir -p "$AGENT_LAYERS/.tools"
@@ -88,7 +110,7 @@ fi
 defs=${AGENT_REPART_DEFINITIONS:-$(python3 -c 'import mkosi, os; print(os.path.dirname(mkosi.__file__))')/resources/repart/definitions}
 for kind in sysext:"" confext:-etc; do
     unshare -r systemd-repart --definitions="$defs/${kind%%:*}-unsigned.repart.d" --copy-source="$b/out/$name" \
-        --empty=create --size=auto --dry-run=no "$AGENT_LAYERS/.$name${kind#*:}.raw.new" || fail 'systemd-repart failed'
+        --empty=create --size=auto --dry-run=no "$AGENT_LAYERS/.$name${kind#*:}.raw.new" >>"$log" 2>&1 || fail 'systemd-repart failed'
 done
 
 manifest=$b/out/$name.manifest

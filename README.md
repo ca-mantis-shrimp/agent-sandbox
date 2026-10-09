@@ -112,7 +112,11 @@ Sessions belong to the system manager and outlive the terminal that starts them.
 
 Each build writes `<name>.build.json` last: recipe and base ids, build time, packages not in the base manifest, and the lines of `usr/share/agent-layer/versions` (`name version`, written by the recipe for anything fetched outside pacman). Failed builds leave the old images and record alone and keep `AGENT_LAYERS/.build/<name>` as evidence.
 
+mkosi's and systemd-repart's output goes to `AGENT_LAYERS/.build/<name>.log` (overwritten each build, kept after failure too); the terminal shows only agent-layer's own lines. Staleness is decided again after taking the build lock, so two concurrent runs build once. Age is a soft trigger: when the only reason is "older than <n>d" and the rebuild fails, agent-layer keeps the old images, prints a `WARNING` naming the log and the build's date, and exits 0, so an offline machine keeps working. Every other reason still fails.
+
 Trust rule: the recipe runs with network on the host, in a user namespace. Pass only a trusted, committed recipe.
+
+`agent-run` and `agent-land` (before gating) make the run's layers current with `ensure_layers` (`lib/agent-runs.sh`): the `harness` layer from the installed tool's `layers/harness`, and a `project` layer named after the repository when the real repository has `.sandbox/layer` at the workspace's base commit (read with `git archive`, never from the workspace clone). A worker that edits `.sandbox/layer` therefore runs on the old layer; the new recipe takes effect after landing. Each `sessions/<n>.json`, and the `gate` entry in the manifest, records `layers`: `{"harness": <build record>, "project": <build record or null>}`, the contents of `AGENT_LAYERS/<name>.build.json` at the start.
 
 ## Tests
 

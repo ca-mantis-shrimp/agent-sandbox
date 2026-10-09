@@ -131,3 +131,44 @@ repo_commits() { # <work-dir> <from-ref>
         done | jq -s 'add // {}'
     )
 }
+
+# Make the layers a run will mount current. Needs the caller's $tool. The harness
+# layer comes from the installed tool, never the workspace. The project layer comes
+# from <repository>'s object store at the workspace's base commit (manifest .base,
+# else HEAD), read with archive only. TRUST: the recipe runs on the host with
+# network, so it must be committed history the human already has, never the
+# agent-writable clone: a worker that edits .sandbox/layer runs on the old layer.
+ensure_layers() ( # <run-dir> <repository>
+    "$tool/bin/agent-layer" harness harness "$tool/layers/harness" || return
+    base=$(jq -r '.base // empty' "$1/manifest.json" 2>/dev/null) || base=
+    [ -n "$base" ] || base=$(git -C "$2" rev-parse HEAD) || return
+    git -C "$2" cat-file -e "$base:.sandbox/layer" 2>/dev/null || return 0
+    recipe=$(mktemp -d) || return
+    status=0
+    { git -C "$2" archive "$base" .sandbox/layer | tar -x -C "$recipe" &&
+        "$tool/bin/agent-layer" project "$(basename "$2")" "$recipe/.sandbox/layer"; } || status=$?
+    rm -rf "$recipe"
+    return $status
+)
+
+# Read-lock the layers a run uses (fds 5 and 6), so no agent-layer build replaces an
+# image between layers_json and the unit's mounts; agent-layer holds the exclusive
+# lock while it builds. Call after ensure_layers, release with release_layers once
+# the unit has started. The project lock is taken whenever the run could mount
+# <repo>.raw, record or not: write_agent_run mounts an existing image, and a first
+# build can publish after any check. Descriptors across bin/: 9 is the workspace
+# lock (agent-run, agent-land, agent-stop, agent-reconcile) and agent-layer's build
+# lock, 8 is agent-land's gate workspace lock; 5 and 6 belong to these two functions.
+hold_layers() { # <repository>
+    mkdir -p "$AGENT_LAYERS/.build" || return
+    exec 5>>"$AGENT_LAYERS/.build/harness.lock" && flock -s 5 || return
+    exec 6>>"$AGENT_LAYERS/.build/$(basename "$1").lock" && flock -s 6
+}
+release_layers() { exec 5>&- 6>&-; }
+
+# The build records the run's images came from: {"harness": ..., "project": ... or null}.
+layers_json() { # <repository>
+    jq -n --argjson harness "$(cat "$AGENT_LAYERS/harness.build.json" 2>/dev/null || echo null)" \
+        --argjson project "$(cat "$AGENT_LAYERS/$(basename "$1").build.json" 2>/dev/null || echo null)" \
+        '{harness: $harness, project: $project}'
+}
