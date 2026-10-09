@@ -68,4 +68,27 @@ git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
 [ "$(repo_commits "$repo" refs/agent/base | jq -c '.["."] | length')" = 2 ]
 [ "$(repo_commits "$repo" refs/agent/missing)" = '{}' ]
 
+# --- new workspaces snapshot pi config, never login or mount declarations ---
+export AGENT_RUNS="$tmp/new-runs" HOME="$tmp/home"
+mkdir -p "$HOME/.pi/agent/agents" "$repo/.sandbox"
+printf '%s\n' '{"packages":["npm:remote-pi","npm:keep"],"theme":"test"}' >"$HOME/.pi/agent/settings.json"
+echo custom >"$HOME/.pi/agent/agents/custom.md"
+echo private-login >"$HOME/.pi/agent/auth.json"
+echo 'obsolete /must-not-create' >"$repo/.sandbox/volumes"
+git -C "$repo" add .sandbox/volumes
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m config
+id=$(cd "$repo" && "$tool/bin/agent-new")
+run="$AGENT_RUNS/$id"
+[ -d "$run/work" ] && [ -d "$run/home" ] && [ -d "$run/agents" ]
+[ -z "$(find "$run/home" -mindepth 1 -print)" ]
+[ "$(readlink "$run/pi/auth.json")" = /srv/pi-login/auth.json ]
+jq -e '.packages == ["npm:keep"] and .theme == "test"' "$run/pi/settings.json" >/dev/null
+[ "$(cat "$run/pi/agents/custom.md")" = custom ]
+[ ! -e "$run/work/must-not-create" ]
+rm -rf "$HOME/.pi"
+id=$(cd "$repo" && "$tool/bin/agent-new")
+[ "$(readlink "$AGENT_RUNS/$id/pi/auth.json")" = /srv/pi-login/auth.json ]
+[ ! -e "$AGENT_RUNS/$id/pi/settings.json" ]
+[ ! -e "$AGENT_RUNS/$id/pi/agents" ]
+
 printf 'agent-runs tests passed\n'

@@ -29,7 +29,7 @@ The host provides:
 - `AGENT_BASE`, an absolute path to the base OS tree, and `AGENT_LAYERS`, an absolute path to a directory of prebuilt disk extension images. The runner does not build images.
 - `harness.raw` (the harness tools) and `<repo>.raw` (the project's tools), where `<repo>` is the original repository directory's name. Both are required to start. Optional `harness-etc.raw` and `<repo>-etc.raw` carry each layer's `/etc` configuration as confext pairs. The sysext images carry `/usr` and `/opt`; extension-release names must match the run-directory slots, `harness`, `harness-etc`, `project`, `project-etc`.
 - For Claude, `/etc/credstore/agent.claude_token`. The unit imports it and `agents/session` exports `CLAUDE_CODE_OAUTH_TOKEN` from the systemd credential directory when present.
-- For pi, a host-managed shared login in `/var/lib/agent-runs/.pi`, mounted at `/home/agent/.pi/agent`. The runner does not copy auth.json. User-level settings and custom agents are snapshotted when present.
+- For pi, a host-managed shared login in `/var/lib/agent-runs/.pi`, mounted at `/srv/pi-login`. Each run's `pi/auth.json` links to `/srv/pi-login/auth.json`; the runner never copies the login. User-level settings and custom agents are snapshotted when present.
 
 `agent-doctor` checks the required host runtime, process group, base and harness layer, and reports a missing or unreadable Claude credential. A project's layer is checked on launch, with the missing path in the error. Building layers and deciding staleness are a later step; hosts must supply images matching the project being run.
 
@@ -47,13 +47,13 @@ Workspaces are run directories at `$AGENT_RUNS/<workspace>/` (default **`/var/li
 | `home/` | writable home, retained across sessions |
 | `cache` | link to `$AGENT_RUNS/.cache/<repo>`, shared by that repo's workspaces |
 | `review/work` | link to `../work`, only for read-only sessions; removed for writers |
-| `pi/settings.json`, `pi/agents/` | optional per-workspace pi configuration |
+| `pi/` | pi's run directory (`PI_CODING_AGENT_DIR`): optional `settings.json` and `agents/`, plus the shared-login `auth.json` link |
 
-Each workspace mounts at **`/job/<workspace>`**, with the checkout at **`/job/<workspace>/work`**. The distinct path prevents Cargo's shared target cache from reusing another workspace's local-crate build. The agent runs as its own system user, with a read-only base tree, restricted network access and host-managed resource limits. See the header of [`agent@.service`](system/usr/lib/systemd/system/agent@.service) for the authoritative run-directory contract.
+Each workspace mounts at **`/srv/job/<workspace>`** (`AGENT_JOB`), with the checkout at **`/srv/job/<workspace>/work`**. The session entry point is `/srv/agents/session` and the shared repository cache is `/srv/cache`. The runner creates `work/`, `home/` and `agents/` before starting, but never creates mount-point directories inside them; mount targets exist in the run directory or sit on the unit's `/srv` and `/home` tmpfs. The distinct path prevents Cargo's shared target cache from reusing another workspace's local-crate build. The agent runs as its own system user, with a read-only base tree, restricted network access and host-managed resource limits. See the header of [`agent@.service`](system/usr/lib/systemd/system/agent@.service) for the authoritative run-directory contract.
 
 The target repository's own startup lives in `.sandbox/`, all optional:
 
-- `setup`: sourced before each session and the landing gate; exports tool paths and cache locations under `/cache`. Session output goes to `setup.log`; failure fails the session. No separate cache-mount declaration is needed.
+- `setup`: sourced before each session and the landing gate; exports tool paths and points tools directly at `/srv/cache` (for example, `CARGO_HOME=/srv/cache/cargo` and `CARGO_TARGET_DIR=/srv/cache/target`). Session output goes to `setup.log`; failure fails the session. `.sandbox/volumes` is not supported; the project chooses cache locations in `setup`, not mount declarations.
 - `prompt.md`: standing prose prepended to every session prompt.
 - `gate`: the repository's landing gate (`AGENT_LAND_GATE` can override it).
 

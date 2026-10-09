@@ -32,7 +32,8 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
             echo "agent-sandbox > missing layer: $AGENT_LAYERS/$image.raw" >&2; exit 1;
         }
     done
-    mkdir -p "$run/layers" "$run/home" "$(runs_dir)/.cache/$repo_name"
+    mkdir -p "$run/work" "$run/home" "$run/agents" "$run/pi" "$run/layers" "$(runs_dir)/.cache/$repo_name"
+    ln -sfn /srv/pi-login/auth.json "$run/pi/auth.json"
     ln -sfn "$AGENT_BASE" "$run/root"
     ln -sfn "$(runs_dir)/.cache/$repo_name" "$run/cache"
     for slot in harness harness-etc project project-etc; do
@@ -49,7 +50,8 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
     }
     for value in "$3" "$4" "$5" "${AGENT_SESSION_USD:-}"; do
         case "$value" in *'
-'*|*''*) echo 'agent-sandbox > newline in run environment' >&2; exit 1 ;; esac
+'*|*'
+'*) echo 'agent-sandbox > newline in run environment' >&2; exit 1 ;; esac
     done
     {
         printf 'AGENT_HARNESS="%s"\n' "$(env_value "$3")"

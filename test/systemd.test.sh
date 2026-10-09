@@ -23,6 +23,10 @@ AGENT_SESSION_USD=5 write_agent_run "$run" /repo/example claude 'a "model"' 1 tr
 [ "$(readlink "$run/root")" = "$AGENT_BASE" ]
 [ "$(readlink "$run/cache")" = "$AGENT_RUNS/.cache/example" ]
 [ -d "$run/cache" ]
+[ -d "$run/work" ] && [ -d "$run/home" ] && [ -d "$run/agents" ]
+[ "$(readlink "$run/pi/auth.json")" = /srv/pi-login/auth.json ]
+# Mounts must not require directories inside the checkout, home or snapshot.
+[ -z "$(find "$run/work" "$run/home" "$run/agents" -mindepth 1 -print)" ]
 [ "$(readlink "$run/layers/harness.raw")" = "$AGENT_LAYERS/harness.raw" ]
 [ "$(readlink "$run/layers/project.raw")" = "$AGENT_LAYERS/example.raw" ]
 [ "$(readlink "$run/layers/project-etc.raw")" = "$AGENT_LAYERS/example-etc.raw" ]
@@ -35,6 +39,7 @@ touch "$run/home/keep"
 rm "$AGENT_LAYERS/example-etc.raw"
 write_agent_run "$run" /repo/example pi model 2 false
 [ -f "$run/home/keep" ]
+[ "$(readlink "$run/pi/auth.json")" = /srv/pi-login/auth.json ]
 [ ! -L "$run/review/work" ]
 [ ! -L "$run/layers/project-etc.raw" ]
 if grep -q AGENT_SESSION_USD "$run/run.env"; then exit 1; fi
@@ -63,7 +68,7 @@ agent_unit_active ws
 
 # Real launchers with fake units: readers serialize too; a writer clears review.
 mkdir -p "$run/sessions" "$run/prompts" "$run/transcripts"
-cp -R "$tool/agents" "$run/agents"
+cp -R "$tool/agents/." "$run/agents/"
 git init -q "$run/work"
 git -C "$run/work" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
 jq -n '{state:"ready", repo:"/repo/example"}' >"$run/manifest.json"

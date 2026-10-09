@@ -4,7 +4,8 @@ set -eu
 tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-export AGENT_JOB="$tmp/job" AGENT_HARNESS=claude AGENT_MODEL=test
+export AGENT_JOB="$tmp/srv/job/workspace" AGENT_HARNESS=claude AGENT_MODEL=test
+export PI_CODING_AGENT_DIR="$AGENT_JOB/pi"
 mkdir -p "$AGENT_JOB/work/.sandbox" "$AGENT_JOB/sessions" "$AGENT_JOB/prompts" "$AGENT_JOB/transcripts" "$tmp/bin" "$tmp/credentials"
 printf '{"prompt":"prompts/1.md"}\n' >"$AGENT_JOB/sessions/1.json"
 echo prompt >"$AGENT_JOB/prompts/1.md"
@@ -21,6 +22,16 @@ rm "$CREDENTIALS_DIRECTORY/agent.claude_token"
 unset CLAUDE_CODE_OAUTH_TOKEN
 "$tool/agents/session" 1
 [ "$(cat "$AGENT_JOB/token-seen")" = missing ]
+
+# Pi uses the unit's run-specific directory, not its default home directory.
+mkdir -p "$PI_CODING_AGENT_DIR"
+printf '%s\n' '#!/bin/sh' \
+    '[ "$PI_CODING_AGENT_DIR" = "$AGENT_JOB/pi" ] || exit 1' \
+    'echo '\''{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi done"}],"stopReason":"stop","usage":{"cost":{"total":0}}}}'\''' >"$tmp/bin/pi"
+chmod +x "$tmp/bin/pi"
+export AGENT_HARNESS=pi
+"$tool/agents/session" 1
+jq -e '.ok and .closing == "pi done"' "$AGENT_JOB/sessions/1.json" >/dev/null
 
 export AGENT_HARNESS=gate
 unset AGENT_MODEL

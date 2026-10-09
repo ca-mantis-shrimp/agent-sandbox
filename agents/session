@@ -4,9 +4,9 @@
 # AGENT_MODEL, on the prompt its record points at. Knows the harnesses (claude,
 # pi) and nothing about what the prompt asks.
 #
-#   /agents/session <n>
+#   /srv/agents/session <n>
 #
-# The workspace is mounted at $AGENT_JOB (/job/<workspace>): each workspace has
+# The workspace is mounted at $AGENT_JOB (/srv/job/<workspace>): each workspace has
 # its own path, so Cargo, which keys local crates by path, never reuses one
 # workspace's build in another through the shared target cache. Works in
 # $AGENT_JOB/work, writes the transcript to $AGENT_JOB/transcripts/<n>.jsonl

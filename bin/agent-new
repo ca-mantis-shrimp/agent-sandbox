@@ -34,7 +34,7 @@ until id=$(date +%Y%m%d-%H%M%S) && mkdir "$runs/$id" 2>/dev/null; do sleep 1; do
 run="$runs/$id"
 branch="agent/$id"
 
-mkdir "$run/sessions" "$run/prompts" "$run/transcripts"
+mkdir "$run/sessions" "$run/prompts" "$run/transcripts" "$run/home"
 cp -R "$tool/agents" "$run/agents"
 manifest() { # merge a jq expression into manifest.json
     jq "$@" "$run/manifest.json" >"$run/manifest.tmp" && mv "$run/manifest.tmp" "$run/manifest.json"
@@ -68,6 +68,7 @@ git submodule -q foreach "git switch -q -c $branch && git update-ref refs/agent/
 # host-shared login in /var/lib/agent-runs/.pi, not a copied auth.json. A host
 # without pi has no config to reuse; pi sessions then run on pi's defaults.
 mkdir -p "$run/pi"
+ln -s /srv/pi-login/auth.json "$run/pi/auth.json"
 pi_settings="$HOME/.pi/agent/settings.json"
 [ ! -f "$pi_settings" ] ||
     jq 'if has("packages") then .packages -= ["npm:pi-background-tasks@latest", "npm:remote-pi", "npm:pi-memory", "npm:pi-mcp-adapter"] else . end' \
