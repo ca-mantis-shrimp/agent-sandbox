@@ -4,3 +4,7 @@
 set -eu
 npm install -g --cache /tmp/npm-cache --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code
 npm install -g --cache /tmp/npm-cache --ignore-scripts @earendil-works/pi-coding-agent@0.99.2
+# What floated in, for agent-layer's build record.
+mkdir -p /usr/share/agent-layer
+npm ls -g --depth=0 --json | jq -r '.dependencies | to_entries[] | "\(.key) \(.value.version)"' \
+    >/usr/share/agent-layer/versions

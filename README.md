@@ -31,7 +31,7 @@ The host provides:
 - For Claude, `/etc/credstore/agent.claude_token`. The unit imports it and `agents/session` exports `CLAUDE_CODE_OAUTH_TOKEN` from the systemd credential directory when present.
 - For pi, a host-managed shared login in `/var/lib/agent-runs/.pi`, mounted at `/srv/pi-login`. Each run's `pi/auth.json` links to `/srv/pi-login/auth.json`; the runner never copies the login. User-level settings and custom agents are snapshotted when present.
 
-`agent-doctor` checks the required host runtime, process group, base and harness layer, and reports a missing or unreadable Claude credential. A project's layer is checked on launch, with the missing path in the error. Building layers and deciding staleness are a later step; hosts must supply images matching the project being run.
+`agent-doctor` checks the required host runtime, process group, base and harness layer, and reports a missing or unreadable Claude credential. A project's layer is checked on launch, with the missing path in the error. `agent-layer` builds layers; the runner still only checks that they exist.
 
 Workspaces are run directories at `$AGENT_RUNS/<workspace>/` (default **`/var/lib/agent-runs`**). `AGENT_RUNS` is overridable for tests; the installed unit hard-codes `/var/lib/agent-runs`, so a different path is not a live-host runtime option. Directories and records are created with umask 002 for the agents group; the host declares group ownership/inheritance.
 
@@ -105,6 +105,14 @@ A conflict leaves the candidate for resolution and a rerun. A red gate leaves th
 ## Unattended runs
 
 Sessions belong to the system manager and outlive the terminal that starts them. The project's driver must also be host-managed (a service or timer), with the sandbox's `bin/` on its declared PATH. Scheduling, login/session policy, credentials and keeping the machine awake belong to the host, not this runner. Spending stays bounded by `AGENT_SESSION_USD` per session and by the driver's own cap; results wait in the records for `agent-result` and `agent-harvest`.
+
+## Layers
+
+`agent-layer <slot> <name> <recipe-dir> [--force]` builds one layer (a sysext and a confext) from an mkosi recipe directory (see `layers/harness`) on `AGENT_BASE`, into `AGENT_LAYERS/<name>.raw` and `<name>-etc.raw`. Bases are pinned and layers float: it rebuilds only when the recipe's content hash changes, the base changes, or the last build is older than `AGENT_LAYER_MAX_AGE` seconds (default 604800). It writes the extension-release files from the base's os-release, so systemd accepts the layer only on that base.
+
+Each build writes `<name>.build.json` last: recipe and base ids, build time, packages not in the base manifest, and the lines of `usr/share/agent-layer/versions` (`name version`, written by the recipe for anything fetched outside pacman). Failed builds leave the old images and record alone and keep `AGENT_LAYERS/.build/<name>` as evidence.
+
+Trust rule: the recipe runs with network on the host, in a user namespace. Pass only a trusted, committed recipe.
 
 ## Tests
 
