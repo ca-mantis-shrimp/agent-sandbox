@@ -1,0 +1,19 @@
+# Installs agent sessions' system files on an Arch host: build from this
+# checkout with `makepkg -si`. pacman's systemd hooks create the user and run
+# directory and reload the manager, so the package is only its files.
+pkgname=agent-sandbox-system
+pkgver=r57.578354a
+pkgrel=1
+pkgdesc='systemd session unit, polkit rule, user and run directory for agent-sandbox'
+arch=(any)
+url='https://github.com/ca-mantis-shrimp/agent-sandbox'
+license=(MIT)
+depends=('systemd>=257' polkit)
+
+pkgver() {
+    printf 'r%s.%s' "$(git -C "$startdir" rev-list --count HEAD)" "$(git -C "$startdir" rev-parse --short HEAD)"
+}
+
+package() {
+    cp -a "$startdir/usr" "$pkgdir/"
+}
