@@ -1,0 +1,31 @@
+#!/bin/sh
+# Sandbox-only: plain data for host readers; never sourced by host commands.
+export_session() {
+    ws=$(jq -r .id "$job/manifest.json")
+    out="$job/exports/$n"
+    mkdir -p "$out"
+    { echo .; git -C "$job/work" submodule --quiet foreach --recursive 'echo "$displaypath"'; } >"$out/paths"
+    # Keep the loop out of a pipeline: POSIX sh otherwise hides an export
+    # failure behind the final jq's successful exit status.
+    while IFS= read -r path; do
+        dir="$job/work/$path"
+        base=$(git -C "$dir" log --format=%H "refs/agent/base..agent/$ws") || return 1
+        base=$(printf '%s\n' "$base" | jq -R 'select(length > 0)' | jq -s .)
+        commits=$(git -C "$dir" log --format=%H "refs/agent/session-$n..HEAD") || return 1
+        commits=$(printf '%s\n' "$commits" | jq -R 'select(length > 0)' | jq -s .)
+        status=$(git -C "$dir" status --porcelain --ignore-submodules) || return 1
+        dirty=false
+        [ -z "$status" ] || dirty=true
+        if [ "$path" = . ]; then file=root
+        else file="sm-$(printf '%s' "$path" | jq -sRr @uri)"; fi
+        if [ "$(printf '%s' "$base" | jq length)" -gt 0 ]; then
+            rm -f "$out/$file.bundle"
+            git -C "$dir" bundle create "$out/$file.bundle" "refs/agent/base..agent/$ws" || return 1
+        fi
+        jq -n --arg path "$path" --argjson base "$base" --argjson session "$commits" \
+            --argjson dirty "$dirty" '{($path): {base: $base, session: $session, dirty: $dirty}}'
+    done <"$out/paths" >"$out/rows"
+    jq -s 'add // {}' "$out/rows" >"$job/exports/$n.tmp"
+    rm -f "$out/paths" "$out/rows"
+    mv "$job/exports/$n.tmp" "$job/exports/$n.json"
+}

@@ -43,8 +43,7 @@ fi
 if [ -n "$n" ]; then
     json=$(session_json "$run" "$(cat "$run/sessions/$n.json")")
 else
-    commits='{}'
-    [ -d "$run/work" ] && commits=$(repo_commits "$run/work" refs/agent/base)
+    commits=$(repo_commits "$run" refs/agent/base)
     json=$(workspace_json "$run" | jq --argjson commits "$commits" '. + {commits: $commits}')
 fi
 printf '%s\n' "$json"

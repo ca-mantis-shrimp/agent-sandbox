@@ -1,5 +1,5 @@
 # Shared by the agent-* tools: where workspaces live and how their
-# records are read. repo_commits and clone_local use git; workspace_json and
+# records are read. clone_local uses git on fresh clones; workspace_json and
 # running_sessions read records. session_json and human_verdict_reminder need
 # the caller's $tool, the sandbox's own directory (each tool resolves it
 # through any symlink to itself), to locate lib/agent-review.jq.
@@ -30,11 +30,12 @@ runs_dir() {
 }
 
 # The repository a workspace works on: the checkout agent-new cloned, as its
-# manifest records. Workspaces from before the manifest recorded it, and
-# candidates without a manifest, use the caller's own checkout.
+# manifest records. A missing repository is an error, never the caller's checkout.
 workspace_repo() { # <workspace-dir>
-    repo=$(jq -r '.repo // empty' "$1/manifest.json" 2>/dev/null) || repo=
-    [ -n "$repo" ] || repo=$(git rev-parse --show-toplevel)
+    repo=$(jq -er '.repo | select(type == "string" and length > 0)' "$1/manifest.json" 2>/dev/null) || {
+        echo "workspace manifest lacks .repo: $1/manifest.json" >&2
+        return 1
+    }
     printf '%s\n' "$repo"
 }
 
@@ -119,17 +120,52 @@ clone_local() { # <repo> <dest>
 # Each repo's commits since <from-ref>, as {"<path>": [sha, ...]}, keyed by the
 # repo's path in the clone ("." is the repo itself); repos with none are left
 # out, and so is a repo that lacks the ref.
-repo_commits() { # <work-dir> <from-ref>
-    (
-        cd "$1"
-        {
-            echo .
-            git submodule --quiet foreach --recursive 'echo "$displaypath"'
-        } | while read -r repo; do
-            git -C "$repo" log --format=%H "$2..HEAD" 2>/dev/null |
-                jq -R . | jq -s --arg repo "$repo" 'select(length > 0) | {($repo): .}'
-        done | jq -s 'add // {}'
-    )
+repo_paths() { # <real-repo>; never the workspace clone
+    echo .
+    git -C "$1" submodule --quiet foreach --recursive 'echo "$displaypath"'
+}
+
+latest_writer() { # <run-dir>
+    set -- "$1"/sessions/*.json
+    [ -e "$1" ] || return 0
+    jq -s -er '[.[] | select(.read_only != true)]
+        | if any(.[]; (.n | type != "number") or (.n <= 0) or (.n != (.n | floor)))
+          then error("writer session n must be a positive integer")
+          elif length == 0 then "" else max_by(.n).n end' "$@"
+}
+
+positive_session_number() {
+    case "$1" in ''|0*|*[!0-9]*) return 1 ;; esac
+}
+
+missing_export() { # <workspace> <n>; recovery advice shared by harvest and land
+    printf 'session %s left no export (killed?); run a short writer session to export, e.g. agent-run --in %s --prompt "Commit nothing; end."\n' "$2" "$1" >&2
+}
+
+session_export() { # <run-dir> <n>; invalid or absent data is unknown (null)
+    if ! positive_session_number "$2" || [ -L "$1/exports" ] ||
+        [ -L "$1/exports/$2.json" ] || [ ! -f "$1/exports/$2.json" ]; then
+        printf 'null\n'
+        return
+    fi
+    real_repo=$(workspace_repo "$1") || return
+    paths=$(repo_paths "$real_repo" | jq -R . | jq -s .)
+    jq -se --argjson paths "$paths" '
+        select(length == 1) | .[0]
+        | def shas: type == "array" and all(.[]; type == "string" and test("^[0-9a-fA-F]{40}$"));
+        select(type == "object" and (keys | sort) == ($paths | sort))
+        | select(all(.[]; (.base | shas) and (.session | shas) and (.dirty | type == "boolean")))
+    ' "$1/exports/$2.json" 2>/dev/null || printf 'null\n'
+}
+
+repo_commits() { # <run-dir> <from-ref>
+    case "$2" in
+        refs/agent/base) n=$(latest_writer "$1"); field=base ;;
+        refs/agent/session-*) n=${2#refs/agent/session-}; field=session ;;
+        *) printf 'null\n'; return ;;
+    esac
+    session_export "$1" "$n" | jq --arg field "$field" '
+        if . == null then null else with_entries(.value = .value[$field] | select(.value | length > 0)) end'
 }
 
 # Make the layers a run will mount current. Needs the caller's $tool. The harness

@@ -4,7 +4,7 @@
 #
 #   agent-harvest <workspace>
 #
-# Fetches branch agent/<workspace> from its clone into that repo and into each
+# Fetches branch agent/<workspace> from session bundles into that repo and each
 # submodule, prints what each repo gained and what each session said, and marks
 # the workspace harvested. Nothing is merged, and the workspace stays usable:
 # review the branches, add more sessions and harvest again, or land them with
@@ -24,32 +24,40 @@ repo=$(workspace_repo "$run")
 [ -z "$(running_sessions "$run")" ] ||
     { echo "agent-harvest > a session is still running in $id; wait for it or agent-stop $id" >&2; exit 1; }
 
-harvest() { # <repo-dir> <repo-dir-in-run>
-    name=${1#"$repo"/}
-    [ "$1" = "$repo" ] && name=$(basename "$repo")
-    # refs/agent/base is where agent-run started this repo.
-    if [ "$(git -C "$2" rev-list --count "refs/agent/base..$branch")" -eq 0 ]; then
-        printf 'agent-harvest > %s: no commits\n' "$name"
+n=$(latest_writer "$run")
+data=$(session_export "$run" "$n")
+[ "$data" != null ] || { missing_export "$id" "$n"; exit 1; }
+# The export is advisory about which commits exist; the agent can only
+# misreport its own work. Git verifies the objects received from its bundle.
+repo_paths "$repo" | while IFS= read -r path; do
+    commits=$(printf '%s' "$data" | jq -r --arg p "$path" '.[$p].base[]')
+    if [ -z "$commits" ]; then
+        printf 'agent-harvest > %s: no commits\n' "$path"
     else
-        fetch "$1" "$2"
+        if [ "$path" = . ]; then file=root
+        else file="sm-$(printf '%s' "$path" | jq -sRr @uri)"; fi
+        # Copy to a host-owned regular file: an export symlink must not turn
+        # a bundle fetch into a repository fetch (upload-pack reads config).
+        bundle=$(mktemp)
+        trap 'rm -f "$bundle"' EXIT
+        source="$run/exports/$n/$file.bundle"
+        [ ! -L "$run/exports/$n" ] && [ ! -L "$source" ] && [ -f "$source" ] || {
+            echo "agent-harvest > not a regular bundle: $source" >&2; exit 1;
+        }
+        cp -P "$source" "$bundle"
+        [ ! -L "$bundle" ] && [ -f "$bundle" ] || exit 1
+        if ! verification=$(git -C "$repo/$path" bundle verify "$bundle" 2>&1); then
+            printf '%s\n' "$verification" >&2
+            exit 1
+        fi
+        git -C "$repo/$path" -c transfer.fsckObjects=true fetch -q --no-recurse-submodules "$bundle" "$branch:$branch"
+        rm -f "$bundle"
+        printf 'agent-harvest > %s (%s commits):\n' "$path" "$(git -C "$repo/$path" rev-list --count --no-walk $commits)"
+        git -C "$repo/$path" log --oneline --no-walk $commits | sed 's/^/    /'
     fi
-    # Harvest only moves commits; say so when the agent left work behind.
-    dirty=$(git -C "$2" status --porcelain --ignore-submodules)
-    [ -n "$dirty" ] && printf '    UNCOMMITTED in the run (not harvested):\n%s\n' "$dirty" | sed 's/^ /    /'
-    return 0
-}
-
-fetch() {
-    git -C "$1" fetch -q --no-recurse-submodules "$2" "$branch:$branch"
-    printf 'agent-harvest > %s:\n' "$name"
-    git -C "$2" log --oneline "refs/agent/base..$branch" | sed 's/^/    /'
-}
-
-harvest "$repo" "$run/work"
-git -C "$repo" config --file .gitmodules --get-regexp '^submodule\..*\.path$' 2>/dev/null |
-    while read -r _ path; do
-        harvest "$repo/$path" "$run/work/$path"
-    done
+    [ "$(printf '%s' "$data" | jq -r --arg p "$path" '.[$p].dirty')" = false ] ||
+        echo '    UNCOMMITTED in the run (not harvested)'
+done
 
 # Each session, in order: who worked, how it ended, what it said. (Manifests
 # from before sessions had their own records call the closing message "why".)

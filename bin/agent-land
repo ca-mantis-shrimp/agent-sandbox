@@ -54,7 +54,8 @@ if [ -f "$run/manifest.json" ]; then
     [ -z "$(running_sessions "$run")" ] || { echo 'agent-land > unreconciled session' >&2; exit 1; }
 fi
 gate=${AGENT_LAND_GATE:-.sandbox/gate}
-submodules=$(git -C "$repo" config --file "$repo/.gitmodules" --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
+submodules=$(repo_paths "$repo" | grep -vx '\.' | sort -r)
+checkpoint="refs/agent/candidate/$id"
 
 say() { echo "agent-land > $*" >&2; }
 stop() {
@@ -117,11 +118,16 @@ fetch_branch() {
 # to harvest: its tip is already in HEAD.
 check_harvested() {
     [ -d "$run/work" ] || return 0
+    n=$(latest_writer "$run")
+    exported=$(session_export "$run" "$n")
+    [ "$exported" != null ] || { missing_export "$id" "$n"; exit 1; }
     for sm in . $submodules; do
-        tip=$(git -C "$run/work/$sm" rev-parse -q --verify "refs/heads/$branch") || continue
-        git -C "$repo/$sm" merge-base --is-ancestor "$tip" "$branch" 2>/dev/null ||
-            git -C "$repo/$sm" merge-base --is-ancestor "$tip" HEAD 2>/dev/null ||
-            stop "$(name "$sm"): the workspace has commits on $branch that are not harvested; run agent-harvest $id"
+        tips=$(printf '%s' "$exported" | jq -r --arg p "$sm" '.[$p].base[]')
+        for tip in $tips; do
+            git -C "$repo/$sm" merge-base --is-ancestor "$tip" "$branch" 2>/dev/null ||
+                git -C "$repo/$sm" merge-base --is-ancestor "$tip" HEAD 2>/dev/null ||
+                stop "$(name "$sm"): the workspace has commits on $branch that are not harvested; run agent-harvest $id"
+        done
     done
 }
 
@@ -192,15 +198,14 @@ gate_candidate() {
 advance() {
     for sm in . $submodules; do
         real=$(git -C "$repo/$sm" rev-parse HEAD)
-        [ "$real" = "$(git -C "$cand/$sm" rev-parse refs/agent/land-base)" ] ||
-            [ "$real" = "$(git -C "$cand/$sm" rev-parse HEAD)" ] ||
+        [ "$real" = "$(git -C "$repo/$sm" rev-parse "$checkpoint/base")" ] ||
+            [ "$real" = "$(git -C "$repo/$sm" rev-parse "$checkpoint/tip")" ] ||
             stop "$(name "$sm") moved since the candidate was built; nothing advanced. Remove $cand and rerun"
     done
     advanced=""
     for sm in $submodules .; do
-        tip=$(git -C "$cand/$sm" rev-parse HEAD)
+        tip=$(git -C "$repo/$sm" rev-parse "$checkpoint/tip")
         [ "$(git -C "$repo/$sm" rev-parse HEAD)" = "$tip" ] && continue
-        git -C "$repo/$sm" fetch -q --no-recurse-submodules "$cand/$sm" "$(git -C "$cand/$sm" symbolic-ref HEAD)"
         git -C "$repo/$sm" merge --ff-only -q "$tip" ||
             stop "could not fast-forward $(name "$sm");${advanced:- nothing} advanced. Fix it and rerun"
         advanced="$advanced $(name "$sm")"
@@ -210,6 +215,8 @@ advance() {
 cleanup() {
     for sm in . $submodules; do
         git -C "$repo/$sm" branch -q -d "$branch" 2>/dev/null || true
+        git -C "$repo/$sm" update-ref -d "$checkpoint/tip"
+        git -C "$repo/$sm" update-ref -d "$checkpoint/base"
     done
     rm -rf "$run/work" "$cand"
     manifest --arg at "$(date -Iseconds)" '.landed = $at'
@@ -228,10 +235,30 @@ if [ -f "$run/manifest.json" ]; then
         say "warning: could not load workspace reviews for landing advisories"
     fi
 fi
-build_candidate
-fetch_branch
 check_harvested
-merge_candidate
+# A gated candidate is forever untrusted. Remember tips in the real repos.
+recorded=true
+for sm in . $submodules; do
+    for ref in base tip; do
+        git -C "$repo/$sm" rev-parse -q --verify "$checkpoint/$ref" >/dev/null || recorded=false
+    done
+done
+if [ ! -d "$cand" ] || [ "$recorded" != true ]; then
+    build_candidate
+    fetch_branch
+    merge_candidate
+    # Root refs are the final recording step, after every submodule's pair.
+    for sm in $submodules .; do
+        git -C "$repo/$sm" fetch -q --no-recurse-submodules "$cand/$sm" "+HEAD:$checkpoint/tip"
+        git -C "$repo/$sm" update-ref "$checkpoint/base" "$(git -C "$cand/$sm" rev-parse refs/agent/land-base)"
+    done
+fi
+for sm in . $submodules; do
+    if git -C "$repo/$sm" rev-parse -q --verify "$branch" >/dev/null; then
+        git -C "$repo/$sm" merge-base --is-ancestor "$branch" "$checkpoint/tip" ||
+            stop "new work harvested since gating; remove $cand and rerun"
+    fi
+done
 gate_candidate
 advance
 cleanup
