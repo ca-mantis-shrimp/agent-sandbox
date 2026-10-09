@@ -15,7 +15,7 @@ Started 2026-09-25. The NUC runs agents unattended; this charter keeps that disc
 - **Git is the only channel.** A run clones the repo, the agent commits, `agent-harvest` fetches the commits back. No credentials enter the container except the model's own.
 - **The host stays boring.** Tools live in the image; runs, caches and images are disposable.
 - **Stopping is a good outcome.** A clear account of why an agent stopped beats a forced finish. Spend caps bound every session, and nothing rewards gaming the result.
-- **Standards first.** The environment is the repo's root `Containerfile` (OCI). Telemetry uses OpenTelemetry semantic conventions; a custom attribute needs a reason.
+- **Standards first.** The environment is systemd images: a pinned base from personal-os, plus extension layers (sysext/confext DDIs) built by mkosi from recipes; sessions are systemd units (meta-analysis DECISIONS: systemd, not podman; images are DDIs; bases pinned, layers float). Telemetry uses OpenTelemetry semantic conventions; a custom attribute needs a reason.
 
 ## Dependency direction
 
@@ -23,13 +23,13 @@ ClearHead is aware of everyone; nobody is aware of ClearHead. Charters and actio
 
 | Layer | Knows about | Owns |
 | --- | --- | --- |
-| host | the sandbox, by `PATH` | podman, lingering, the user manager's `PATH`, credentials, timers: when things run |
-| sandbox | git, podman, harnesses | clone, container, harness layer and adapters, manifest, telemetry |
-| project | the sandbox, through `.sandbox/` | its image, setup, gate, cache volumes, driver: what runs |
+| host | the sandbox, by `PATH` and its package | the installed unit and polkit rule (system/PKGBUILD), the base tree, credentials in /etc/credstore, timers: when things run |
+| sandbox | git, systemd, mkosi, harnesses | clone, `agent@` unit, layer builds (`agent-layer`), harness layer and adapters, manifest, telemetry |
+| project | the sandbox, through `.sandbox/` | its layer recipe (`.sandbox/layer`, optional), setup, gate, driver: what runs |
 | ClearHead driver (platform's) | sandbox, ClearHead | queue loop, prompt, completed/blocked/unfinished |
 | ClearHead data model | whatever it links to | an action points at the commits a run produced |
 
-Many hosts and many projects use the same sandbox, each declaring its own part its own way (decided with the human, 2026-10-03); the sandbox knows none of them. So it works on any repo with a root `Containerfile`, with or without a `.clearhead/`, on any host that `agent-doctor` passes.
+Many hosts and many projects use the same sandbox, each declaring its own part its own way (decided with the human, 2026-10-03); the sandbox knows none of them. So it works on any repo, with or without a `.sandbox/layer` or a `.clearhead/`, on any host that `agent-doctor` passes.
 
 ## Flow
 
@@ -64,10 +64,7 @@ The runner left platform: this repository is the sandbox, with its history, and 
 
 **Known gaps:**
 
-- The harness tests are not run by any gate. `agent-land.test.sh` needs podman and the image, so it cannot run inside `validate-pinned`.
 - `sandbox-cross-vendor-review` can close: a real work run was reviewed by a read-only session from another vendor. Its description still asks for a durable verdict and findings; the closing message carries them today.
-- The image's Claude Code logs `unrecognized_model` for `claude-sonnet-5-5`; sessions still run and bill. Bump claude-code in the image with the pi bump.
-- pi is pinned at 0.85.1, whose newest model is `gpt-6-sol`. `gpt-6.1-sol` needs 0.99+: bump it with a smoke session, as part of the runner's own image layer.
 - The landing gate re-downloads npm and uv dependencies on every landing; cache volumes would make it faster.
 - Two writers at once in one workspace would need a worktree per session; nothing needs it yet.
 
