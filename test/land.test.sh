@@ -102,8 +102,48 @@ workspace() { # <id>
 # Run from inside the fixture: a workspace without a manifest naming its repo
 # lands into the caller's checkout.
 land() { # <id> [gate]: agent-land's exit status
-    (cd "$root" && AGENT_LAND_GATE=${2:-.sandbox/gate} "$tool/bin/agent-land" "$1") >"$tmp/land.log" 2>&1
+    (cd "$root" && AGENT_LAND_GATE=${2:-.sandbox/gate} "$tool/bin/agent-land" "$1") >"$tmp/land.stdout" 2>"$tmp/land.log"
 }
+
+# --- detached checkouts stop before cloning; a corrected rerun lands ----------
+
+workspace detached
+before_root=$(head_of "$root") before_sub=$(head_of "$root/sub")
+git -C "$root" switch -q --detach
+fails land detached
+grep -q 'fixture is on a detached HEAD' "$tmp/land.log"
+[ ! -e "$AGENT_RUNS/land-detached/work" ]
+git -C "$root" switch -q main
+git -C "$root/sub" switch -q --detach
+fails land detached
+grep -q 'sub is on a detached HEAD' "$tmp/land.log"
+[ ! -e "$AGENT_RUNS/land-detached/work" ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$before_sub" ]
+git -C "$root/sub" switch -q main
+land detached
+! grep -Eiq 'fatal:|error:' "$tmp/land.log"
+[ "$(cat "$root/note")" = detached ]
+[ "$(cat "$root/sub/state")" = detached ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+[ ! -e "$AGENT_RUNS/land-detached/work" ]
+
+# --- an interrupted build is not reused just because its directory exists ----
+
+workspace incomplete
+partial="$AGENT_RUNS/land-incomplete/work"
+(. "$tool/lib/agent-runs.sh" && clone_local "$root" "$partial")
+git -C "$partial" update-ref refs/agent/land-base HEAD
+# Only the root was marked before the build stopped; no completion marker.
+[ ! -f "$partial/.git/agent-land-built" ]
+land incomplete
+grep -q 'removing incomplete candidate' "$tmp/land.log"
+! grep -Eiq 'fatal:|error:' "$tmp/land.log"
+[ "$(cat "$root/note")" = incomplete ]
+[ "$(cat "$root/sub/state")" = incomplete ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
+[ ! -e "$partial" ]
 
 # --- a red gate moves no real branch ------------------------------------------
 
