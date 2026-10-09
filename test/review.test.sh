@@ -54,7 +54,7 @@ mv "$tmp/reconciled" "$tmp/reviews/one.json"
 # The actual harvest command prints external reviews even without sessions.
 mkdir -p "$tmp/tool/bin" "$tmp/tool/lib" "$tmp/runs/ws/work" "$tmp/runs/ws/reviews"
 cp "$tool/bin/agent-harvest" "$tmp/tool/bin/"
-cp "$tool/lib/agent-runs.sh" "$tool/lib/agent-review.jq" "$tool/lib/agent-quadlet.sh" "$tmp/tool/lib/"
+cp "$tool/lib/agent-runs.sh" "$tool/lib/agent-review.jq" "$tool/lib/agent-systemd.sh" "$tmp/tool/lib/"
 printf '#!/bin/sh\nexit 0\n' >"$tmp/tool/bin/agent-reconcile"
 chmod +x "$tmp/tool/bin/agent-reconcile"
 # The repo being harvested into comes from the manifest, not the tool's location.

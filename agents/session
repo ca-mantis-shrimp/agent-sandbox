@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# Run one session inside its container: the agent named by AGENT_HARNESS and
+# Run one session inside its systemd sandbox: the agent named by AGENT_HARNESS and
 # AGENT_MODEL, on the prompt its record points at. Knows the harnesses (claude,
 # pi) and nothing about what the prompt asks.
 #
@@ -8,7 +8,7 @@
 #
 # The workspace is mounted at $AGENT_JOB (/job/<workspace>): each workspace has
 # its own path, so Cargo, which keys local crates by path, never reuses one
-# workspace's build in another through the shared target volume. Works in
+# workspace's build in another through the shared target cache. Works in
 # $AGENT_JOB/work, writes the transcript to $AGENT_JOB/transcripts/<n>.jsonl
 # and adds the session's result to its own record, $AGENT_JOB/sessions/<n>.json:
 #
@@ -29,9 +29,25 @@ set -eu
 
 n=${1:?usage: session <n>}
 job=${AGENT_JOB:?}
+harness=${AGENT_HARNESS:?}
+# Gate sessions do not need a model, prompt or session record. The trap also
+# records setup failures; a killed unit has no success status to mistake for a pass.
+if [ "$harness" = gate ]; then
+    exec >"$job/gate.log" 2>&1
+    trap 'status=$?; printf "%s\n" "$status" >"$job/gate.status"' EXIT
+    cd "$job/work"
+    [ ! -f .sandbox/setup ] || . ./.sandbox/setup
+    cd "$job/work"
+    echo "session > gate: ${AGENT_LAND_GATE:-.sandbox/gate}"
+    "${AGENT_LAND_GATE:-.sandbox/gate}"
+    exit "$?"
+fi
+if [ -f "${CREDENTIALS_DIRECTORY:-/nonexistent}/agent.claude_token" ]; then
+    CLAUDE_CODE_OAUTH_TOKEN=$(cat "$CREDENTIALS_DIRECTORY/agent.claude_token")
+    export CLAUDE_CODE_OAUTH_TOKEN
+fi
 record="$job/sessions/$n.json"
 prompt="$job/$(jq -r .prompt "$record")"
-harness=${AGENT_HARNESS:?}
 model=${AGENT_MODEL:?}
 session_usd=${AGENT_SESSION_USD:-3}
 log="$job/transcripts/$n.jsonl"

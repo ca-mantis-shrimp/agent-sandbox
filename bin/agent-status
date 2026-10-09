@@ -1,7 +1,7 @@
 #!/bin/sh
 #
 # On-demand summary of agent workspaces, read from their records, transcripts
-# and each session's systemd --user unit.
+# and each workspace's system-manager unit.
 #
 #   agent-status                    one line per workspace
 #   agent-status <workspace> [n]    its line, then the last n tool
@@ -18,7 +18,7 @@
 set -eu
 
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
-. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-systemd.sh"
 . "$tool/lib/agent-runs.sh"
 runs=$(runs_dir)
 stuck=${AGENT_STUCK_SECS:-600}
@@ -49,7 +49,7 @@ row() { # <workspace-dir>
         # The record says a session is running; the unit says whether it is.
         active=0
         for n in $(running_sessions "$dir"); do
-            agent_unit_active "$(session_unit_id "$id" "$n")" && active=1
+            agent_unit_active "$id" && active=1
         done
         if [ "$active" -eq 0 ]; then
             flag=RECONCILE

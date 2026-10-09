@@ -3,7 +3,7 @@
 # running_sessions read records. session_json and human_verdict_reminder need
 # the caller's $tool, the sandbox's own directory (each tool resolves it
 # through any symlink to itself), to locate lib/agent-review.jq.
-# Tests can source this without podman or systemd.
+# Tests can source this without a systemd session.
 #
 # Three separate things, combined by whoever calls the tools:
 #
@@ -12,7 +12,7 @@
 #              own facts. It lasts until it is landed or discarded.
 #   agent      a harness and a model, chosen per session.
 #   session    one agent working on one prompt in one workspace: its own
-#              systemd unit, and its own record, sessions/<n>.json.
+#              workspace's systemd unit, and its own record, sessions/<n>.json.
 #
 # A session's record is written by whoever knows the fact: the host when it
 # starts and when it finalizes the session, the session itself for its result.
@@ -26,49 +26,7 @@ session_json() { # <workspace-dir> <record-json>; read-only enrichment
 }
 
 runs_dir() {
-    printf '%s\n' "${AGENT_RUNS:-$HOME/agent-runs}"
-}
-
-# Build the image sessions and gates run in, tagged <tag>: the repository's
-# own image from <context>/Containerfile (its tools, on any base, with git,
-# jq and npm), tagged <tag>-toolchain, then the sandbox's layer over it
-# (agents/Containerfile: the harnesses and the agent user). Needs $tool.
-build_agent_image() { # <context> <tag>
-    podman build -q -t "$2-toolchain" "$1" &&
-        podman build -q -t "$2" --build-arg "BASE=localhost/$2-toolchain" \
-            -f "$tool/agents/Containerfile" "$tool/agents"
-}
-
-# Per-session resource limits belong to the host, not the repository.
-session_cpus() {
-    printf '%s\n' "${AGENT_CPUS:-8}"
-}
-
-session_memory() {
-    printf '%s\n' "${AGENT_MEMORY:-16G}"
-}
-
-# The cache volumes a repository declares in <clone>/.sandbox/volumes, one
-# `name:/container/path` per line (# comments and blank lines allowed), printed
-# as `volume:/container/path`. A branch writes this file and the next session
-# mounts what it says, so only named volumes are allowed (a host path would
-# mount the host into the container), and each name gets the agent-cache-
-# prefix so a branch cannot reach the runner's own volumes (agent-pi holds
-# pi's login). Repositories that declare the same name share the volume.
-repo_volumes() { # <clone-dir>
-    [ -f "$1/.sandbox/volumes" ] || return 0
-    sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' "$1/.sandbox/volumes" |
-        while IFS= read -r line; do
-            name=${line%%:*} path=${line#*:}
-            case "$name" in "" | [!a-z0-9]* | *[!a-z0-9_.-]*) name= ;; esac
-            case "$path" in /*) ;; *) path= ;; esac
-            case "$path" in *[!A-Za-z0-9_./-]*) path= ;; esac
-            if [ -z "$name" ] || [ -z "$path" ] || [ "$line" = "$path" ]; then
-                echo "agent-sandbox > .sandbox/volumes: not a named volume and an absolute path: $line" >&2
-                exit 1
-            fi
-            printf 'agent-cache-%s:%s\n' "$name" "$path"
-        done
+    printf '%s\n' "${AGENT_RUNS:-/var/lib/agent-runs}"
 }
 
 # The repository a workspace works on: the checkout agent-new cloned, as its
@@ -90,11 +48,6 @@ ref_session() { # <ref> -> n, or empty when the ref names the whole workspace
         */*) printf '%s\n' "${1#*/}" ;;
         *) printf '\n' ;;
     esac
-}
-
-# The id a session's Quadlet unit is named by (see quadlet_unit).
-session_unit_id() { # <workspace> <n>
-    printf '%s-%s\n' "$1" "$2"
 }
 
 # The numbers of the sessions whose record says they are running.

@@ -1,67 +1,31 @@
 #!/bin/sh
-#
-# Check this host for what the sandbox needs, one line per check. Read-only:
-# it reports and changes nothing (see README.md, Host setup).
-#
-#   agent-doctor
-#
-# Exit 0 when every required check passes, 1 otherwise. Notes (credentials a
-# harness needs, what unattended runs need) are reported but do not fail it: a
-# host may use only one harness, or run sessions only while someone watches.
+# Read-only host checks. Credentials are a note: hosts may use only pi.
 set -u
-
 failed=0
 ok() { printf 'agent-doctor > ok       %s\n' "$*"; }
 missing() { printf 'agent-doctor > MISSING  %s\n' "$*"; failed=1; }
 note() { printf 'agent-doctor > note     %s\n' "$*"; }
-
-for tool in git jq flock systemctl podman; do
+for tool in git jq flock systemctl; do
     if command -v "$tool" >/dev/null; then ok "$tool"; else missing "$tool"; fi
 done
-
-user=$(id -un)
-# Sessions run as uid 1000 under --userns=keep-id; commits are the host
-# user's only when the host user is uid 1000 too.
-if [ "$(id -u)" = 1000 ]; then ok "uid 1000"; else missing "uid 1000 (this user is $(id -u))"; fi
-
-if command -v podman >/dev/null; then
-    # Quadlet, which runs every session, arrived in Podman 4.4.
-    version=$(podman version --format '{{.Client.Version}}' 2>/dev/null)
-    if printf '4.4\n%s\n' "$version" | sort -V -C; then
-        ok "podman $version (Quadlet needs 4.4)"
-    else
-        missing "podman 4.4 or newer for Quadlet (found ${version:-none})"
-    fi
-    for f in /etc/subuid /etc/subgid; do
-        if grep -q "^$user:" "$f" 2>/dev/null; then ok "$f has $user"; else missing "$f has no range for $user (rootless podman)"; fi
-    done
-    if podman secret exists claude_token 2>/dev/null; then
-        ok "claude_token secret"
-    else
-        note "no claude_token podman secret: Claude sessions cannot start"
-    fi
-    # pi keeps its login in auth.json, which a session without one leaves as
-    # {}; the volume is readable only inside podman's user namespace.
-    pi_volume=$(podman volume inspect agent-pi --format '{{.Mountpoint}}' 2>/dev/null)
-    if [ -n "$pi_volume" ] && podman unshare jq -e 'length > 0' "$pi_volume/auth.json" >/dev/null 2>&1; then
-        ok "pi login in the agent-pi volume"
-    else
-        note "no pi login in the agent-pi volume: pi sessions cannot start (README.md, Host setup)"
-    fi
-fi
-
-# Unattended drivers (systemd-run --user, timers) run under the user manager,
-# whose PATH is not your shell's.
-manager_path=$(systemctl --user show-environment 2>/dev/null | sed -n 's/^PATH=//p')
-if [ -n "$manager_path" ] && (PATH=$manager_path; command -v agent-run >/dev/null); then
-    ok "the systemd user manager finds agent-run"
+version=$(systemctl --version 2>/dev/null | awk 'NR == 1 {print $2}')
+case "$version" in
+    ''|*[!0-9]*) missing "systemd 257 or newer (found ${version:-none})" ;;
+    *) if [ "$version" -ge 257 ]; then ok "systemd $version"; else missing "systemd 257 or newer (found $version)"; fi ;;
+esac
+if [ "$(systemctl show agent@.service -p LoadState --value 2>/dev/null)" = loaded ]; then
+    ok 'agent@.service installed'
 else
-    note "the systemd user manager's PATH lacks agent-run: unattended drivers cannot start sessions (README.md, Unattended runs)"
+    missing 'agent@.service not installed'
 fi
-
-if [ "$(loginctl show-user "$user" -p Linger --value 2>/dev/null)" = yes ]; then
-    ok "lingering"
-else
-    note "lingering is off: sessions stop when $user logs out (loginctl enable-linger)"
-fi
+case " $(id -Gn) " in
+    *' agents '*) ok 'calling process is in agents group' ;;
+    *) missing 'calling process is not in agents group (membership needs a fresh login; polkit uses process groups)' ;;
+esac
+if [ -n "${AGENT_BASE:-}" ] && [ -d "$AGENT_BASE" ]; then ok "base tree $AGENT_BASE"
+else missing "AGENT_BASE tree (${AGENT_BASE:-unset})"; fi
+if [ -n "${AGENT_LAYERS:-}" ] && [ -f "$AGENT_LAYERS/harness.raw" ]; then ok "harness layer $AGENT_LAYERS/harness.raw"
+else missing "AGENT_LAYERS/harness.raw (${AGENT_LAYERS:-unset})"; fi
+if [ -r /etc/credstore/agent.claude_token ]; then ok '/etc/credstore/agent.claude_token readable'
+else note '/etc/credstore/agent.claude_token missing or unreadable: Claude sessions need the host credential'; fi
 exit "$failed"

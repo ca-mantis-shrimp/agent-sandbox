@@ -1,9 +1,7 @@
 #!/bin/sh
-# This repo's landing gate: every test that runs without Podman or a real
-# systemd session (land.test.sh needs both).
+# Every test runs locally with host commands stubbed. Real sessions remain a host check.
 set -eu
 for t in test/*.test.sh; do
-    [ "$t" = test/land.test.sh ] && continue
     echo "gate > $t"
     sh "$t"
 done

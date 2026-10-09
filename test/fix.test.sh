@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fixture records and a stub launcher: no podman, systemd or model required.
+# Fixture records and a stub launcher: no host units or model required.
 set -eu
 tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d)

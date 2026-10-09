@@ -20,7 +20,7 @@ ref=${1:?usage: agent-result <workspace>[/<n>] [--wait]}
 wait=0
 [ "${2:-}" = --wait ] && wait=1
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
-. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-systemd.sh"
 . "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")
 n=$(ref_session "$ref")
@@ -30,7 +30,8 @@ test -f "$run/manifest.json" || { echo "agent-result > no workspace $ws" >&2; ex
 
 any_active() {
     for s in ${n:-$(running_sessions "$run")}; do
-        agent_unit_active "$(session_unit_id "$ws" "$s")" && return 0
+        [ "$(jq -r .state "$run/sessions/$s.json")" = running ] || continue
+        agent_unit_active "$ws" && return 0
     done
     return 1
 }

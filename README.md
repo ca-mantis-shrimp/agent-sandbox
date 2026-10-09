@@ -1,39 +1,39 @@
 # Agent sandbox
 
-Run headless agents in disposable, rootless Podman containers on your own hardware. Git is the output channel: agents commit without git credentials; the human harvests, reviews, lands and pushes. The runner knows prompts, not any project's task system, and works on any Git repository with a root `Containerfile`.
+Run headless agents in disposable systemd sandboxes on your own hardware. Git is the output channel: agents commit without git credentials; the human harvests, reviews, lands and pushes. The runner knows prompts, not any project's task system.
 
 ## Workspaces, agents and sessions
 
 - A **workspace** is a clone of the repository you run `agent-new` in, at its HEAD, with each repo on `agent/<workspace>` and `refs/agent/base` marking its starting point. It holds a harness snapshot and records, and lasts across sessions until landed or discarded.
 - An **agent** is a harness plus a model, chosen per session (`--harness claude|pi`, `--model <id>`). Defaults live in `agents/models.env`; `AGENT_HARNESS`, `AGENT_CLAUDE_MODEL` and `AGENT_PI_MODEL` override them.
-- A **session** is one agent on one prompt in one workspace: one systemd user unit and one `sessions/<n>.json` record. A worker, a reviewer from another vendor and a fixer can be successive sessions seeing the same commits.
+- A **session** is one agent on one prompt in one workspace: the system-manager unit `agent@<workspace>.service` and one `sessions/<n>.json` record. A worker, a reviewer from another vendor and a fixer can be successive sessions seeing the same commits.
 
-One writer at a time per workspace; a writer excludes readers. Read-only sessions may overlap. Work belonging together goes in one workspace, as sessions (`--in`). Parallel workspaces should cover separate areas: independent clones otherwise conflict or start without each other's unlanded work. The human's review time is the limit: at most two unreviewed workspaces. While a session works, the orchestrator works on something that does not overlap.
+One session at a time per workspace, including read-only sessions. Work belonging together goes in one workspace, as sessions (`--in`). Parallel workspaces should cover separate areas: independent clones otherwise conflict or start without each other's unlanded work. The human's review time is the limit: at most two unreviewed workspaces. While a session works, the orchestrator works on something that does not overlap.
 
 ## Install
 
-There is no install step. The sandbox runs from its own checkout, so installing it is a declaration, kept wherever your environment is declared (a shell profile, a dotfiles manager such as chezmoi, a Nix or distribution package):
+Installing is a declaration, not a script, kept wherever your environment is declared:
 
 - this repository (`https://github.com/ca-mantis-shrimp/agent-sandbox`), checked out at a pinned revision or tag;
-- its `bin/` on `PATH`, directly or through symlinks.
+- its `bin/` on `PATH`, directly or through symlinks;
+- the host integration shipped in `system/`, including `agent@.service`, the agent user, agents group, run-directory permissions and polkit authorization. Hosts install it through their own package/image declaration (the Arch package definition is `system/PKGBUILD`).
 
 Updating is moving that pin. A workspace keeps the harness snapshot it started with. The commands find `lib/` and `agents/` beside the real `bin/`, through any symlink, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
 
-## Host setup
+## Host setup and images
 
-The host provides, once:
+The host provides:
 
-- Git, jq, `flock` (util-linux), Podman (rootless, with subordinate IDs for your user in `/etc/subuid` and `/etc/subgid`) and a systemd user session.
-- uid 1000 for the user running the sandbox: sessions run as uid 1000 under `--userns=keep-id`, so their commits stay yours.
-- `loginctl enable-linger`, so sessions survive logging out.
-- The `claude_token` Podman secret for Claude sessions: `claude setup-token`, then `podman secret create claude_token -` with the token on stdin.
-- For pi sessions, the sandbox's own pi login in the `agent-pi` volume, never the host's `auth.json`: log in once with `podman run --rm -it --userns=keep-id -v agent-pi:/home/agent/.pi/agent localhost/<repo>-agent pi`, then `/login`. The host's `~/.pi/agent/settings.json` is reused when there is one.
+- Git, jq, `flock` (util-linux), and systemd **257 or newer**, with the static system unit installed.
+- The calling process in the **agents** group. Polkit uses process groups: after adding membership, use a fresh login (or `newgrp agents`).
+- `AGENT_BASE`, an absolute path to the base OS tree, and `AGENT_LAYERS`, an absolute path to a directory of prebuilt disk extension images. The runner does not build images.
+- `harness.raw` (the harness tools) and `<repo>.raw` (the project's tools), where `<repo>` is the original repository directory's name. Both are required to start. Optional `harness-etc.raw` and `<repo>-etc.raw` carry each layer's `/etc` configuration as confext pairs. The sysext images carry `/usr` and `/opt`; extension-release names must match the run-directory slots, `harness`, `harness-etc`, `project`, `project-etc`.
+- For Claude, `/etc/credstore/agent.claude_token`. The unit imports it and `agents/session` exports `CLAUDE_CODE_OAUTH_TOKEN` from the systemd credential directory when present.
+- For pi, a host-managed shared login in `/var/lib/agent-runs/.pi`, mounted at `/home/agent/.pi/agent`. The runner does not copy auth.json. User-level settings and custom agents are snapshotted when present.
 
-`agent-doctor` checks them, one line each, and changes nothing. Images need nothing installed: `agent-new` builds them per repository.
+`agent-doctor` checks the required host runtime, process group, base and harness layer, and reports a missing or unreadable Claude credential. A project's layer is checked on launch, with the missing path in the error. Building layers and deciding staleness are a later step; hosts must supply images matching the project being run.
 
-The image is built in two layers. The target repository's root `Containerfile` comes first: built as root, on any base, it installs the tools that repository needs and must also provide `git`, `jq` and `npm`. The sandbox's `agents/Containerfile` goes over it, adding the harnesses (and their version pins) and the uid-1000 user sessions run as, whose home is `/home/agent`. Tools live in the image.
-
-Workspaces live at `$AGENT_RUNS/<workspace>/` (default `~/agent-runs`):
+Workspaces are run directories at `$AGENT_RUNS/<workspace>/` (default **`/var/lib/agent-runs`**). `AGENT_RUNS` is overridable for tests; the installed unit hard-codes `/var/lib/agent-runs`, so a different path is not a live-host runtime option. Directories and records are created with umask 002 for the agents group; the host declares group ownership/inheritance.
 
 | Path | Contents |
 | --- | --- |
@@ -41,21 +41,27 @@ Workspaces live at `$AGENT_RUNS/<workspace>/` (default `~/agent-runs`):
 | `agents/` | harness snapshot, mounted read-only |
 | `manifest.json` | workspace facts, including the repository it cloned |
 | `sessions/`, `prompts/`, `transcripts/` | per-session records, prompts and transcripts |
+| `run.env` | harness, model, session number, optional spend cap |
+| `root` | link to `AGENT_BASE` |
+| `layers/` | links to the required images and existing optional confext pairs |
+| `home/` | writable home, retained across sessions |
+| `cache` | link to `$AGENT_RUNS/.cache/<repo>`, shared by that repo's workspaces |
+| `review/work` | link to `../work`, only for read-only sessions; removed for writers |
+| `pi/settings.json`, `pi/agents/` | optional per-workspace pi configuration |
 
-Each workspace mounts at **`/job/<workspace>`**, with the working checkout at **`/job/<workspace>/work`**. The distinct path prevents Cargo's shared target cache from reusing another workspace's local-crate build. Later edits to the installed harness do not change a workspace's snapshot.
+Each workspace mounts at **`/job/<workspace>`**, with the checkout at **`/job/<workspace>/work`**. The distinct path prevents Cargo's shared target cache from reusing another workspace's local-crate build. The agent runs as its own system user, with a read-only base tree, restricted network access and host-managed resource limits. See the header of [`agent@.service`](system/usr/lib/systemd/system/agent@.service) for the authoritative run-directory contract.
 
 The target repository's own startup lives in `.sandbox/`, all optional:
 
-- `setup`: sourced before each session and the landing gate; can export `PATH`. Session output goes to `setup.log`; failure fails the session.
+- `setup`: sourced before each session and the landing gate; exports tool paths and cache locations under `/cache`. Session output goes to `setup.log`; failure fails the session. No separate cache-mount declaration is needed.
 - `prompt.md`: standing prose prepended to every session prompt.
 - `gate`: the repository's landing gate (`AGENT_LAND_GATE` can override it).
-- `volumes`: cache volumes for sessions and the gate, one `name:/container/path` per line, such as `cargo:/home/agent/.cargo/registry`. Only named volumes are allowed, since a branch writes this file and the next session mounts it; each becomes `agent-cache-<name>`, shared by every repository that declares the name. The repository's image creates the mount points, under `/home/agent` so the agent user owns them.
 
 A driver that turns a project's tasks into sessions belongs to that project, beside its `.sandbox/`.
 
 ## Commands
 
-Run these from the host, not inside an agent container.
+Run these from the host, not inside an agent session.
 
 | To | Command |
 | --- | --- |
@@ -73,7 +79,7 @@ Run these from the host, not inside an agent container.
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
 
-Limits: `AGENT_SESSION_USD` defaults to $3 per session; `AGENT_RUN_DEADLINE_SEC` to 21600 seconds; `AGENT_STOP_GRACE_SEC` to 60 seconds. Units enforce resource limits per session, which are the host's to set: `AGENT_CPUS` (8) and `AGENT_MEMORY` (16G); the landing gate uses the same. Follow a unit with `journalctl --user -u agent-<workspace>-<n>.service -f`.
+`AGENT_SESSION_USD` defaults to $3 per session. The static unit defaults to a six-hour deadline, 60-second stop grace, 8 CPUs and 16G memory with no swap. Limits belong to the host: use unit overrides or `systemctl set-property` for a workspace, not runner-generated units. Follow a session with `journalctl -u agent@<workspace>.service -f`. Starts and stops use the system manager with `--no-ask-password`, never the user manager.
 
 ## Review, fix and land
 
@@ -89,30 +95,24 @@ Limits: `AGENT_SESSION_USD` defaults to $3 per session; `AGENT_RUN_DEADLINE_SEC`
 4. Read the review, then use `agent-fix <workspace>[/<n>]` for blocking and should-fix findings. Without a session number it selects the latest read-only session with a parsed review. `--nits` includes nits; `--note` supplies human decisions. An external review can instead be supplied with `--review <file> --reviewer <name>` (not with a session number); it is retained in `reviews/`.
 5. Check fixes. A fix does not reconcile a finding; the human records reconciliation after checking it. Reviews advise landing, not gate it.
 6. Run `agent-harvest <workspace>` when no session is running; it fetches branches in each repo and shows commits and closing messages without merging. Harvest again after further sessions.
-7. Run `agent-land <workspace>`. It merges bottom-up into a candidate clone and runs `.sandbox/setup` then `.sandbox/gate` in the candidate's image. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
+7. Run `agent-land <workspace>`. It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
 8. Record the human's landing judgment with `agent-verdict`; then push separately.
 
-A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate, retaining records and transcripts.
+A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate clone, retaining records, transcripts and the candidate's home/cache.
 
 ## Unattended runs
 
-A session is a systemd user unit, so it outlives the terminal that started it. What starts sessions must outlive it too: run the driver (a project's queue runner, or a script of `agent-run --wait` calls) under the systemd user manager, with `systemd-run --user --unit=<name> <driver>` once or a user timer on a schedule, not in a terminal. The host then needs:
-
-- lingering (`loginctl enable-linger`), so the user manager runs without a login and starts at boot;
-- `agent-run` on the user manager's `PATH`, which is not your shell's: declare it in `~/.config/environment.d/` (for example `PATH=${HOME}/Products/agent-sandbox/bin:${PATH}`);
-- a machine that stays awake.
-
-`agent-doctor` checks the first two. Spending stays bounded by `AGENT_SESSION_USD` per session and by the driver's own cap, and results wait in the records for `agent-result` and `agent-harvest`.
+Sessions belong to the system manager and outlive the terminal that starts them. The project's driver must also be host-managed (a service or timer), with the sandbox's `bin/` on its declared PATH. Scheduling, login/session policy, credentials and keeping the machine awake belong to the host, not this runner. Spending stays bounded by `AGENT_SESSION_USD` per session and by the driver's own cap; results wait in the records for `agent-result` and `agent-harvest`.
 
 ## Tests
 
-`test/*.test.sh` run with `sh`; each passes by reaching its last line. `land.test.sh` needs Podman and a base image (`AGENT_LAND_TEST_IMAGE`).
+Run `sh test/<name>.test.sh`, or `.sandbox/gate` for all tests. Runtime and landing tests stub `systemctl` on PATH; they do not start host units or build images. Changes to `agents/` still need real Claude/pi and landing sessions on a configured host to prove image mounts, credentials, group permissions, isolation and lifecycle behavior.
 
 ## Gotchas
 
 - Headless sessions end on their closing reply. Run all commands in the foreground and wait; nothing resumes the session later.
 - Landing refuses unharvested commits: harvest after the last writer finishes.
-- A system upgrade re-executing the user systemd manager formerly ended `--wait` early; `agent_unit_active` handles that (fixed 2026-09-30).
+- A systemd manager re-exec may briefly return no state; that silence is not treated as a stopped session.
 - Headless `nvim`/`busted` can hang on inherited open stdin; append `< /dev/null`.
 - Sourcing `lib/*.sh` into zsh breaks because `path` is zsh's PATH; use `sh -c`.
 

@@ -6,12 +6,11 @@
 #   agent-land <id>
 #
 # No real branch moves until the gate passes. The merge is built in a candidate
-# clone, $AGENT_RUNS/<id>/candidate: submodules merge first, then the root repo,
+# clone, $AGENT_RUNS/land-<id>/work: submodules merge first, then the root repo,
 # which pins each submodule at its merged HEAD. (Merging the root alone lets git
 # keep one side's pin and silently drop the other side's submodule work.) The
-# gate runs on the candidate in the sandbox image, built from the candidate's
-# own Containerfile (with the sandbox's layer over it), so every tool it needs
-# is declared there: .sandbox/setup
+# gate runs on the candidate through the same static agent@ unit and prebuilt
+# host layers as a session: .sandbox/setup
 # is sourced, then .sandbox/gate runs ($AGENT_LAND_GATE overrides it). Only
 # when it passes are the real branches fast-forwarded, submodules first.
 #
@@ -28,15 +27,30 @@
 # Pushing stays a separate, human step. The workspace's clone and candidate are
 # removed; its manifest, gate.log and transcripts stay as the record.
 set -eu
+umask 002
 
 id=${1:?usage: agent-land <id>}
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-runs.sh"
+. "$tool/lib/agent-systemd.sh"
 branch="agent/$id"
 run="$(runs_dir)/$id"
 repo=$(workspace_repo "$run")
-cand="$run/candidate"
-image="$(basename "$repo")-agent:land-$id"
+gate_ws="land-$id"
+gate_run="$(runs_dir)/$gate_ws"
+cand="$gate_run/work"
+unit=$(agent_unit "$gate_ws")
+mkdir -p "$run" "$gate_run"
+exec 9>"$run/.lock"
+flock 9
+exec 8>"$gate_run/.lock"
+flock 8
+agent_unit_active "$id" && { echo "agent-land > session still active in $id" >&2; exit 1; }
+agent_unit_active "$gate_ws" && { echo "agent-land > $unit is still active" >&2; exit 1; }
+if [ -f "$run/manifest.json" ]; then
+    AGENT_WORKSPACE_LOCKED=$id "$tool/bin/agent-reconcile" "$id" >&2
+    [ -z "$(running_sessions "$run")" ] || { echo 'agent-land > unreconciled session' >&2; exit 1; }
+fi
 gate=${AGENT_LAND_GATE:-.sandbox/gate}
 submodules=$(git -C "$repo" config --file "$repo/.gitmodules" --get-regexp '\.path$' 2>/dev/null | awk '{print $2}')
 
@@ -126,19 +140,25 @@ merge_candidate() {
 }
 
 gate_candidate() {
-    say "gating the candidate: $gate in $image (log: $run/gate.log)"
-    ok=true
-    {
-        # The same limits and cache volumes as a session; the volume list is
-        # validated to plain names and paths, so word splitting is safe.
-        memory=$(session_memory)
-        volumes=$(repo_volumes "$cand" | sed 's/^/-v /') &&
-        build_agent_image "$cand" "$image" &&
-            # shellcheck disable=SC2086
-            podman run --rm --userns=keep-id --cpus "$(session_cpus)" --memory "$memory" --memory-swap "$memory" \
-                -v "$cand:/job/land-$id/work" -w "/job/land-$id/work" $volumes \
-                "$image" sh -c '[ ! -f .sandbox/setup ] || . ./.sandbox/setup; exec "$0"' "$gate"
-    } >"$run/gate.log" 2>&1 || ok=false
+    say "gating the candidate: $gate in $unit (log: $run/gate.log)"
+    if [ ! -d "$gate_run/agents" ]; then
+        if [ -d "$run/agents" ]; then cp -R "$run/agents" "$gate_run/agents"
+        else cp -R "$tool/agents" "$gate_run/agents"; fi
+    fi
+    write_agent_run "$gate_run" "$repo" gate "" 0 false
+    rm -f "$gate_run/gate.status"
+    : >"$gate_run/gate.log"
+    ok=false
+    if systemctl --no-ask-password start "$unit"; then
+        while agent_unit_active "$gate_ws"; do sleep 2; done
+        props=$(agent_unit_props "$gate_ws")
+        result=$(printf '%s\n' "$props" | sed -n 's/^Result=//p')
+        code=$(printf '%s\n' "$props" | sed -n 's/^ExecMainCode=//p')
+        status=$(printf '%s\n' "$props" | sed -n 's/^ExecMainStatus=//p')
+        outcome=$(classify_agent_outcome "$result" "$code" "$status" 0)
+        [ "$outcome" != finished ] || [ "$(cat "$gate_run/gate.status" 2>/dev/null)" != 0 ] || ok=true
+    fi
+    cp "$gate_run/gate.log" "$run/gate.log"
     manifest --arg at "$(date -Iseconds)" --argjson ok "$ok" '.gate = {at: $at, ok: $ok, log: "gate.log"}'
     [ "$ok" = true ] || {
         tail -n 20 "$run/gate.log" >&2
@@ -171,7 +191,6 @@ cleanup() {
         git -C "$repo/$sm" branch -q -d "$branch" 2>/dev/null || true
     done
     rm -rf "$run/work" "$cand"
-    podman rmi -f "$image" "$image-toolchain" >/dev/null 2>&1 || true
     manifest --arg at "$(date -Iseconds)" '.landed = $at'
 }
 

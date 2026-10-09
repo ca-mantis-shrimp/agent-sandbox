@@ -1,62 +1,10 @@
 #!/bin/sh
-#
-# Start one agent session: one harness and model, working on one prompt, in one
-# workspace. The session is a rootless Podman Quadlet unit owned by systemd
-# --user; its only output is commits in the workspace's clone and its record.
-#
-#   agent-run --prompt <file|text> [options]
-#
-#   --prompt <file|text>  the task: a file's contents, or the text itself when
-#                         no such file exists
-#   --in <workspace>      work in that workspace (agent-new); without
-#                         it a new workspace is created for this session
-#   --harness claude|pi   the agent's harness   (default: $AGENT_HARNESS, claude)
-#   --model <id>          the agent's model     (default: agents/models.env)
-#   --read-only           mount the clone read-only: a session that reports and
-#                         cannot change anything, e.g. a review
-#   --label <text>        the caller's name for this session, kept in its record
-#   --wait                block until the session ends
-#
-# Returns as soon as the unit is up. The session's reference, <workspace>/<n>,
-# is the only thing on stdout, so any caller, human or agent, can do:
-#
-#   ref=$(agent-run --prompt "...")
-#   agent-result "$ref" --wait          # the session's record, as JSON
-#   agent-run --in "${ref%/*}" --harness pi --read-only --prompt "Review ..."
-#
-# Workspaces, agents and sessions are separate (lib/agent-runs.sh): one
-# agent in its own workspace is the simple case; a worker, then a reviewer from
-# another vendor, then a fixer are three sessions in one workspace, each seeing
-# the commits before it. One session writes to a workspace at a time, and a
-# writer excludes readers; read-only sessions may overlap each other.
-#
-# The container sees only the workspace directory. Its harness snapshot is
-# mounted read-only so neither the agent nor later edits to the source can
-# change it. It has no git credentials; bring commits back with
-# agent-harvest <workspace>.
-#
-# Host resource limits (memory, CPU, tasks/PIDs) and the wall-time deadline are
-# systemd's job, not this script's: it renders a per-session Quadlet unit and
-# starts it. systemd enforces the limits and kills the unit on OOM or at the
-# deadline; nothing here polls or supervises the container. agent-stop
-# requests an early, graceful stop; agent-result finalizes a stopped
-# session's record (through agent-reconcile) and prints it.
-#
-# Needs: podman, a systemd --user session (loginctl enable-linger helps this
-# survive outside an interactive login); Claude sessions need the
-# `claude_token` podman secret, pi sessions the sandbox's own login in the
-# agent-pi volume.
-#   AGENT_RUN_DEADLINE_SEC   wall-clock deadline, RuntimeMaxSec (default 21600, 6h)
-#   AGENT_STOP_GRACE_SEC     grace before SIGKILL, TimeoutStopSec (default 60)
-#   AGENT_SESSION_USD        spend cap for the session (default 3)
-#   AGENT_CPUS, AGENT_MEMORY this host's limits per session (default 8, 16G)
-#   AGENT_CLAUDE_MODEL, AGENT_PI_MODEL   override agents/models.env
-#
-# `journalctl --user -u agent-<workspace>-<n>.service -f` follows a session.
+# Start one session on agent@<workspace>.service. One session at a time,
+# including readers. Prints <workspace>/<n>; --wait waits for its result.
+# Host base and prebuilt layers are declared by AGENT_BASE and AGENT_LAYERS.
 set -eu
-
+umask 002
 say() { echo "agent-run > $*" >&2; }
-
 prompt="" ws="" harness=${AGENT_HARNESS:-claude} model="" label="" readonly=false wait=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -67,56 +15,36 @@ while [ $# -gt 0 ]; do
         --label) label=${2:?--label needs text}; shift 2 ;;
         --read-only) readonly=true; shift ;;
         --wait) wait=1; shift ;;
-        *) say "unknown argument: $1 (see the header of $0)"; exit 2 ;;
+        *) say "unknown argument: $1"; exit 2 ;;
     esac
 done
 [ -n "$prompt" ] || { say "--prompt is required"; exit 2; }
 case "$harness" in claude | pi) ;; *) say "unknown harness: $harness"; exit 2 ;; esac
-# Before any cd: a relative prompt path is relative to the caller.
 if [ -f "$prompt" ]; then prompt_text=$(cat "$prompt"); else prompt_text=$prompt; fi
-
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
-. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-systemd.sh"
 . "$tool/lib/agent-runs.sh"
-cpus=$(session_cpus)
-memory=$(session_memory)
-deadline=${AGENT_RUN_DEADLINE_SEC:-21600}
-stop_grace=${AGENT_STOP_GRACE_SEC:-60}
-
 [ -n "$ws" ] || ws=$("$tool/bin/agent-new")
+unit=$(agent_unit "$ws")
 run="$(runs_dir)/$ws"
 [ "$(jq -r .state "$run/manifest.json" 2>/dev/null)" = ready ] && [ -d "$run/work" ] ||
     { say "$ws is not a ready workspace (landed, failed, or unknown)"; exit 1; }
-
-# The repository's cache volumes, as its branch declares them; checked before
-# the session has a record, so a bad declaration fails the launch cleanly.
-cache_volumes=$(repo_volumes "$run/work")
-
-# The agent: the workspace's snapshot holds the defaults.
 . "$run/agents/models.env"
 if [ -z "$model" ]; then
     case "$harness" in claude) model=$AGENT_CLAUDE_MODEL ;; pi) model=$AGENT_PI_MODEL ;; esac
 fi
-
-# One launcher at a time per workspace decides whether a session may start and
-# claims its number.
 exec 9>"$run/.lock"
 flock 9
-
-# Finalize sessions that have already ended, so their commits are attributed
-# before this session adds its own.
-"$tool/bin/agent-reconcile" "$ws" >&2 || true
-for other in $(running_sessions "$run"); do
-    if [ "$readonly" = false ] || [ "$(jq -r .read_only "$run/sessions/$other.json")" = false ]; then
-        say "session $ws/$other is still running; a writer needs the workspace to itself"
-        exit 1
-    fi
-done
-
+if agent_unit_active "$ws"; then
+    say "$unit is still active; only one session per workspace may run"
+    exit 1
+fi
+# Attribute commits and preserve the last unit result before reusing the unit.
+AGENT_WORKSPACE_LOCKED=$ws "$tool/bin/agent-reconcile" "$ws" >&2
+[ -z "$(running_sessions "$run")" ] || { say "unreconciled session in $ws"; exit 1; }
 n=$(($(find "$run/sessions" -name '*.json' | wc -l) + 1))
+write_agent_run "$run" "$(workspace_repo "$run")" "$harness" "$model" "$n" "$readonly"
 printf '%s\n' "$prompt_text" >"$run/prompts/$n.md"
-# refs/agent/session-<n> marks where each repo stood when the session began,
-# so its record can name exactly the commits it made.
 (
     cd "$run/work"
     git update-ref "refs/agent/session-$n" HEAD
@@ -127,56 +55,22 @@ jq -n --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model
     '{n: $n, label: $label, harness: $harness, model: $model, read_only: $ro,
       prompt: "prompts/\($n).md", state: "running", started: $started}' \
     >"$run/sessions/$n.json"
-
-# Each workspace is mounted at its own path: Cargo keys local crates by path,
-# so with one shared /job/work it reused one workspace's build in another
-# through a shared build-cache volume (2026-09-30).
-job="/job/$ws"
-volumes="Volume=$run:$job
-Volume=$run/agents:/agents:ro"
-for v in $cache_volumes; do
-    volumes="$volumes
-Volume=$v"
-done
-# pi's login lives in the agent-pi volume; the host's config is reused when it
-# has one (agent-new).
-if [ "$harness" = pi ]; then
-    volumes="$volumes
-Volume=agent-pi:/home/agent/.pi/agent"
-    [ ! -f "$run/pi-settings.json" ] || volumes="$volumes
-Volume=$run/pi-settings.json:/home/agent/.pi/agent/settings.json:ro"
-    [ ! -d "$HOME/.pi/agent/agents" ] || volumes="$volumes
-Volume=$HOME/.pi/agent/agents:/home/agent/.pi/agent/agents:ro"
-fi
-[ "$readonly" = true ] && volumes="$volumes
-Volume=$run/work:$job/work:ro"
-environment="Environment=AGENT_JOB=$job
-Environment=AGENT_HARNESS=$harness
-Environment=AGENT_MODEL=$model"
-[ -n "${AGENT_SESSION_USD:-}" ] && environment="$environment
-Environment=AGENT_SESSION_USD=$AGENT_SESSION_USD"
-# Only expose the Claude secret to Claude sessions; pi uses its own volume.
-secret=""
-[ "$harness" = claude ] && secret="Secret=claude_token,type=env,target=CLAUDE_CODE_OAUTH_TOKEN"
-
-unit_id=$(session_unit_id "$ws" "$n")
-unit=$(quadlet_unit "$unit_id")
-unit_dir=$(quadlet_dir)
-mkdir -p "$unit_dir"
-render_agent_unit "$unit_id" "$(jq -r .image "$run/manifest.json")" "/agents/session $n" \
-    "$volumes" "$environment" "$secret" "$((cpus * 100))" "$memory" "$deadline" "$stop_grace" \
-    >"$unit_dir/$unit.container"
-systemctl --user daemon-reload
-
-say "session $ws/$n: $harness $model as $unit.service (transcripts in $run/transcripts/)"
-# Returns once the container is up. Nothing here supervises it: systemd owns
-# the session, and agent-result finalizes its record when it has ended.
-if ! systemctl --user start "$unit.service"; then
-    "$tool/bin/agent-reconcile" "$ws/$n" >&2 || true
-    exit 1
+say "session $ws/$n: $harness $model as $unit (transcripts in $run/transcripts/)"
+start_status=0
+systemctl --no-ask-password start "$unit" || start_status=$?
+if [ "$start_status" -ne 0 ]; then
+    # A rejected start can leave the previous session's success properties on
+    # this reused unit. Never attribute those to the new session. If the unit
+    # is active (or temporarily unavailable), retain the running record instead.
+    if ! agent_unit_active "$ws"; then
+        jq --argjson code "$start_status" --arg at "$(date -Iseconds)" \
+            '. + {state: "failed", outcome: "failed:start", exit: $code, finished: $at}' \
+            "$run/sessions/$n.json" >"$run/sessions/$n.tmp"
+        mv "$run/sessions/$n.tmp" "$run/sessions/$n.json"
+    fi
+    exit "$start_status"
 fi
 flock -u 9
-
 status=0
 if [ "$wait" -eq 1 ]; then
     "$tool/bin/agent-result" "$ws/$n" --wait >/dev/null || status=$?

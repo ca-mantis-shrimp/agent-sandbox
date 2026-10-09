@@ -14,4 +14,4 @@ Ground rules:
 - The sandbox knows no project and no host. Project configuration lives in a repository's `.sandbox/`; host configuration (PATH, lingering, credentials, timers) is declared by the host. Nothing here names ClearHead, platform or a machine.
 - Installing is a declaration (this repository at a pinned revision, `bin/` on `PATH`), not a script.
 - POSIX `sh`, `jq` and Git, no other runtime. `lib/` holds what more than one command needs.
-- Run `sh test/<name>.test.sh` for what you touch; `land.test.sh` needs Podman and a toolchain image. A change to `agents/` (the session runner, the image layer) needs a real session to prove it.
+- Run `sh test/<name>.test.sh` for what you touch; `land.test.sh` stubs systemctl; image mounts and isolation need host verification. A change to `agents/` (the session runner, the image layer) needs a real session to prove it.

@@ -4,20 +4,35 @@
 # gate moves no real branch, a moved branch stops the landing before anything
 # advances, a green gate lands the merge with the right pin and cleans up, and
 # a repo without submodules lands too.
-# Needs podman and a toolchain image to build the fixtures FROM (platform's by
-# default, so nothing is pulled; the sandbox's layer over it is cached after
-# the first landing). Each assertion aborts the script under set -e, so
-# reaching the final line is the pass.
+# systemctl is stubbed; gate dispatch runs locally, not in a host sandbox.
+# Real image mounts and isolation must still be verified on the host.
 set -eu
 
 tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-base_image=${AGENT_LAND_TEST_IMAGE:-localhost/platform-agent-toolchain}
-podman image exists "$base_image" || { echo "agent-land.test > no image $base_image; run agent-new once in platform" >&2; exit 1; }
-
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"; podman rmi -f fixture-agent:land-red fixture-agent:land-red-toolchain >/dev/null 2>&1 || true; podman volume rm -f agent-cache-landtest >/dev/null 2>&1 || true' EXIT
+trap 'rm -rf "$tmp"' EXIT
 export AGENT_RUNS="$tmp/runs" GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localhost \
     GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@localhost
+export AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/images"
+mkdir -p "$AGENT_BASE" "$AGENT_LAYERS" "$tmp/bin"
+touch "$AGENT_LAYERS/harness.raw" "$AGENT_LAYERS/fixture.raw" "$AGENT_LAYERS/plain.raw"
+printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  *"-p ActiveState --value") echo inactive ;;' \
+    '  "--no-ask-password start "*)' \
+    '    ws=${3#agent@}; ws=${ws%.service}' \
+    '    AGENT_JOB="$AGENT_RUNS/$ws"; export AGENT_JOB' \
+    '    set -a; . "$AGENT_JOB/run.env"; set +a' \
+    '    "$AGENT_JOB/agents/session" "$AGENT_SESSION" || true ;;' \
+    '  *"-p Result"*)' \
+    '    ws=${2#agent@}; ws=${ws%.service}' \
+    '    status=$(cat "$AGENT_RUNS/$ws/gate.status")' \
+    '    if [ "$status" = 0 ]; then result=success; else result=exit-code; fi' \
+    '    printf "Result=%s\nExecMainCode=1\nExecMainStatus=%s\n" "$result" "$status" ;;' \
+    '  *) exit 1 ;;' \
+    'esac' >"$tmp/bin/systemctl"
+chmod +x "$tmp/bin/systemctl"
+export PATH="$tmp/bin:$PATH"
 
 commit() { # <repo> <file> <content>
     printf '%s\n' "$3" >"$1/$2"
@@ -40,11 +55,10 @@ commit "$tmp/sub-src" state start
 root="$tmp/fixture"
 git init -q -b main "$root"
 git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" sub
-sandboxed() { # <repo>: the image, a cache volume, and the default gate, which passes when the volume is mounted
+sandboxed() { # <repo>: setup exports a value consumed by the gate
     mkdir -p "$1/.sandbox"
-    echo "FROM $base_image" >"$1/Containerfile"
-    echo "landtest:/home/agent/landtest" >"$1/.sandbox/volumes"
-    printf '#!/bin/sh\ngrep -q " /home/agent/landtest " /proc/self/mountinfo\n' >"$1/.sandbox/gate"
+    printf 'export SETUP_PROOF=yes\n' >"$1/.sandbox/setup"
+    printf '#!/bin/sh\n[ "$SETUP_PROOF" = yes ]\n[ -d "$AGENT_JOB/cache" ]\n' >"$1/.sandbox/gate"
     chmod +x "$1/.sandbox/gate"
     git -C "$1" add -A
     git -C "$1" commit -q -m fixture
@@ -74,7 +88,7 @@ before_root=$(head_of "$root") before_sub=$(head_of "$root/sub")
 fails land red false
 [ "$(head_of "$root")" = "$before_root" ]
 [ "$(head_of "$root/sub")" = "$before_sub" ]
-[ -d "$AGENT_RUNS/red/candidate" ] && [ -s "$AGENT_RUNS/red/gate.log" ]
+[ -d "$AGENT_RUNS/land-red/work" ] && [ -s "$AGENT_RUNS/red/gate.log" ]
 git -C "$root" rev-parse -q --verify refs/heads/agent/red >/dev/null
 
 # --- a branch that moved after the candidate was built stops everything -------
@@ -98,8 +112,7 @@ fails git -C "$root/sub" merge-base --is-ancestor agent/red HEAD
 [ -z "$(git -C "$root" status --porcelain)" ]
 fails git -C "$root" rev-parse -q --verify refs/heads/agent/green >/dev/null
 fails git -C "$root/sub" rev-parse -q --verify refs/heads/agent/green >/dev/null
-[ ! -d "$AGENT_RUNS/green/candidate" ]
-fails podman image exists fixture-agent:land-green
+[ ! -d "$AGENT_RUNS/land-green/work" ]
 
 # --- a workspace clone: unharvested commits refuse, an untouched repo lands ---
 
@@ -145,7 +158,7 @@ grep -q 'warning: could not display the human verdict reminder' "$tmp/land.log"
 [ "$(cat "$root/note")" = advisory ]
 [ "$(cat "$root/sub/state")" = advisory ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
-[ ! -d "$AGENT_RUNS/advisory/candidate" ]
+[ ! -d "$AGENT_RUNS/land-advisory/work" ]
 jq -e '.landed != null and .gate.ok == true' "$AGENT_RUNS/advisory/manifest.json" >/dev/null
 
 # --- a repo without submodules lands the same way -----------------------------

@@ -9,22 +9,26 @@
 # The stop is recorded, so agent-result reports the session as stopped
 # rather than failed.
 set -eu
+umask 002
 
 ref=${1:?usage: agent-stop <workspace>[/<n>]}
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
-. "$tool/lib/agent-quadlet.sh"
+. "$tool/lib/agent-systemd.sh"
 . "$tool/lib/agent-runs.sh"
 ws=$(ref_workspace "$ref")
 only=$(ref_session "$ref")
 run="$(runs_dir)/$ws"
 test -d "$run/sessions" || { echo "agent-stop > no workspace $ws" >&2; exit 1; }
 
+exec 9>"$run/.lock"
+flock 9
 stopped=0
 for n in ${only:-$(running_sessions "$run")}; do
-    unit_id=$(session_unit_id "$ws" "$n")
-    agent_unit_active "$unit_id" || continue
+    [ -f "$run/sessions/$n.json" ] || continue
+    [ "$(jq -r .state "$run/sessions/$n.json")" = running ] || continue
+    agent_unit_active "$ws" || continue
     : >"$run/sessions/$n.stop"
-    systemctl --user stop "$(quadlet_unit "$unit_id").service"
+    systemctl --no-ask-password stop "$(agent_unit "$ws")"
     echo "agent-stop > stop requested for $ws/$n"
     stopped=1
 done

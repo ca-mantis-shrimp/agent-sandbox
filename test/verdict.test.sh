@@ -1,5 +1,5 @@
 #!/bin/sh
-# Manifest fixtures only: no podman, model or systemd required.
+# Manifest fixtures only: no model or host units required.
 set -eu
 tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$tool/lib/agent-runs.sh"
@@ -29,7 +29,7 @@ refuse() {
         echo "unexpected success: $*" >&2; exit 1
     fi
     [ ! -s "$tmp/out" ] && [ -s "$tmp/err" ]
-    cmp "$manifest" "$tmp/before"
+    jq -n -e --rawfile after "$manifest" --rawfile before "$tmp/before" '$after == $before' >/dev/null
 }
 refuse unknown
 refuse ../ws
