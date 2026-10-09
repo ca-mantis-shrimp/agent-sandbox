@@ -1,0 +1,9 @@
+#!/bin/sh
+# This repo's landing gate: every test that runs without Podman or a real
+# systemd session (land.test.sh needs both).
+set -eu
+for t in test/*.test.sh; do
+    [ "$t" = test/land.test.sh ] && continue
+    echo "gate > $t"
+    sh "$t"
+done
