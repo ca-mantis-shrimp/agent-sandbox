@@ -29,6 +29,11 @@ BindPaths=-/var/lib/agent-runs/%i/volumes/cargo-registry:/home/agent/.cargo/regi
 BindPaths=-/var/lib/agent-runs/%i/volumes/target:/home/agent/target
 EnvironmentFile=/var/lib/agent-runs/%i/run.env
 Environment=AGENT_JOB=/job/%i HOME=/home/agent
+# Git trusts the clone, which the person owns, and commits as the agent. Layers
+# cannot carry /etc/gitconfig (extensions cover /usr and /opt only).
+Environment=GIT_CONFIG_COUNT=3 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=*
+Environment=GIT_CONFIG_KEY_1=user.name GIT_CONFIG_VALUE_1=agent
+Environment=GIT_CONFIG_KEY_2=user.email GIT_CONFIG_VALUE_2=agent@localhost
 ImportCredential=agent.*
 WorkingDirectory=/job/%i/work
 ExecStart=/agents/session ${AGENT_SESSION}
