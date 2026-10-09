@@ -10,7 +10,12 @@
 #   agents/      the session entry point, read-only
 #   work/        the clone the agent works in
 #   home/        the agent's home for this workspace
-#   volumes/     optional caches, mounted where the repository asks
+#   cache        optional link to the repository's cache, shared by its
+#                workspaces and mounted at /cache; .sandbox/setup points
+#                its tools there
+#   review/work  link to ../work, present only for a read-only session
+#   pi/          optional per-run pi settings.json and agents/
+# Shared by every run: /var/lib/agent-runs/.pi, pi's login.
 # Limits are defaults; override one run with `systemctl set-property`.
 [Unit]
 Description=agent session in workspace %i
@@ -26,11 +31,14 @@ RootDirectory=/var/lib/agent-runs/%i/root
 ExtensionImages=-/var/lib/agent-runs/%i/layers/harness.raw -/var/lib/agent-runs/%i/layers/harness-etc.raw
 ExtensionImages=-/var/lib/agent-runs/%i/layers/project.raw -/var/lib/agent-runs/%i/layers/project-etc.raw
 BindPaths=/var/lib/agent-runs/%i:/job/%i
+BindReadOnlyPaths=-/var/lib/agent-runs/%i/review/work:/job/%i/work
 BindReadOnlyPaths=/var/lib/agent-runs/%i/agents:/agents
 BindReadOnlyPaths=/run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
 BindPaths=/var/lib/agent-runs/%i/home:/home/agent
-BindPaths=-/var/lib/agent-runs/%i/volumes/cargo-registry:/home/agent/.cargo/registry
-BindPaths=-/var/lib/agent-runs/%i/volumes/target:/home/agent/target
+BindPaths=-/var/lib/agent-runs/%i/cache:/cache
+BindPaths=-/var/lib/agent-runs/.pi:/home/agent/.pi/agent
+BindReadOnlyPaths=-/var/lib/agent-runs/%i/pi/settings.json:/home/agent/.pi/agent/settings.json
+BindReadOnlyPaths=-/var/lib/agent-runs/%i/pi/agents:/home/agent/.pi/agent/agents
 EnvironmentFile=/var/lib/agent-runs/%i/run.env
 Environment=AGENT_JOB=/job/%i HOME=/home/agent
 # Git trusts the clone, which the person owns, and commits as the agent. Layers
