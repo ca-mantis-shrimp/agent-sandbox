@@ -76,7 +76,18 @@ pending() { # <repo-dir>: the workspace's branch exists here and is not merged y
 # Clone the real checkout, each repo on its real branch's name so merge
 # messages read as before, and mark where each started: refs/agent/land-base.
 build_candidate() {
-    [ -d "$cand" ] && return 0
+    [ -d "$cand" ] && [ -f "$cand/.git/agent-land-built" ] && return 0
+    # Refuse detached checkouts before cloning or initializing any repo.
+    for sm in . $submodules; do
+        git -C "$repo/$sm" symbolic-ref -q HEAD >/dev/null ||
+            stop "$(name "$sm") is on a detached HEAD; switch it to its default branch first"
+    done
+    # A failed or interrupted build is disposable, unlike a completed candidate
+    # retained for conflict resolution or a red gate. Mark completion last.
+    if [ -d "$cand" ]; then
+        say "removing incomplete candidate in $cand"
+        rm -rf "$cand"
+    fi
     say "building the candidate in $cand"
     mkdir -p "$run"
     clone_local "$repo" "$cand"
@@ -86,6 +97,7 @@ build_candidate() {
         git -C "$cand/$sm" switch -q -C "$real_branch"
         git -C "$cand/$sm" update-ref refs/agent/land-base HEAD
     done
+    touch "$cand/.git/agent-land-built"
 }
 
 # The workspace's branch as harvested into the real repos. Fetched on every
