@@ -1,9 +1,11 @@
 # One agent session in workspace %i. Everything per run is data in the run
 # directory, /var/lib/agent-runs/%i:
 #   root         link to the base tree the session runs on
-#   layers/      optional extension images (sysext DDIs) stacked on it, bottom
-#                to top: harness.raw (the agents), then project.raw (its
-#                toolchain); each carries extension-release.<its slot name>
+#   layers/      optional extension images stacked on it, bottom to top:
+#                harness.raw (the agents), then project.raw (its toolchain).
+#                A layer's /etc files ship beside it as a confext,
+#                <slot>-etc.raw, since a sysext carries only /usr and /opt.
+#                Each image carries extension-release.<its file name>.
 #   run.env      AGENT_HARNESS, AGENT_MODEL, AGENT_SESSION, AGENT_SESSION_USD
 #   agents/      the session entry point, read-only
 #   work/        the clone the agent works in
@@ -21,7 +23,8 @@ User=agent
 Group=agents
 UMask=0002
 RootDirectory=/var/lib/agent-runs/%i/root
-ExtensionImages=-/var/lib/agent-runs/%i/layers/harness.raw -/var/lib/agent-runs/%i/layers/project.raw
+ExtensionImages=-/var/lib/agent-runs/%i/layers/harness.raw -/var/lib/agent-runs/%i/layers/harness-etc.raw
+ExtensionImages=-/var/lib/agent-runs/%i/layers/project.raw -/var/lib/agent-runs/%i/layers/project-etc.raw
 BindPaths=/var/lib/agent-runs/%i:/job/%i
 BindReadOnlyPaths=/var/lib/agent-runs/%i/agents:/agents
 BindReadOnlyPaths=/run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
