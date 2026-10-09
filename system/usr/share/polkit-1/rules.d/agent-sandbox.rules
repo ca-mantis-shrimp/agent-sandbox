@@ -4,7 +4,10 @@
 polkit.addRule(function (action, subject) {
     if (action.id == "org.freedesktop.systemd1.manage-units" &&
         /^agent@[A-Za-z0-9_.-]+\.service$/.test(action.lookup("unit") || "") &&
-        subject.isInGroup("agents")) {
+        subject.isInGroup("agents") &&
+        // Sessions run as agent, a member of the group for its files: never
+        // let a session start sessions, even if it reached the system bus.
+        subject.user != "agent") {
         return polkit.Result.YES;
     }
 });
