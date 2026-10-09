@@ -1,0 +1,116 @@
+#!/bin/sh
+# agent-layer <slot> <name> <recipe-dir> [--force]
+# Build one extension layer (sysext + confext pair) on the host base, only when stale.
+# Bases are pinned; layers float. A layer is rebuilt when its recipe changes, its base
+# changes, or it is older than AGENT_LAYER_MAX_AGE seconds (default 604800). Each build
+# records what it installed in $AGENT_LAYERS/<name>.build.json.
+# TRUST: the recipe runs with network on the host (in a user namespace). Pass only a
+# trusted, committed recipe.
+# Needs AGENT_BASE (a directory tree) and AGENT_LAYERS. <slot> is harness or project.
+set -eu
+die() { echo "agent-layer > $*" >&2; exit 1; }
+# mkosi leaves read-only directories (its tools tree is mode 0555); rm -rf needs them writable.
+rmtree() { chmod -R u+w "$1" 2>/dev/null || :; rm -rf "$1"; }
+[ $# -ge 3 ] && [ $# -le 4 ] || die 'usage: agent-layer <slot> <name> <recipe-dir> [--force]'
+slot=$1 name=$2 recipe=$3 force=false
+[ "${4:-}" != --force ] || force=true
+[ $# -lt 4 ] || [ "$force" = true ] || die "unknown option: $4"
+case "$slot" in harness | project) ;; *) die "slot must be harness or project: $slot" ;; esac
+case "$name" in '' | *[!A-Za-z0-9_-]*) die "invalid name: $name" ;; esac
+: "${AGENT_BASE:?AGENT_BASE must name the host base tree}"
+: "${AGENT_LAYERS:?AGENT_LAYERS must name the host image directory}"
+[ -d "$AGENT_BASE" ] || die "missing base tree: $AGENT_BASE"
+[ -d "$recipe" ] || die "missing recipe: $recipe"
+max_age=${AGENT_LAYER_MAX_AGE:-604800}
+osr=$AGENT_BASE/usr/lib/os-release
+[ -f "$AGENT_BASE.manifest" ] && base_src=$AGENT_BASE.manifest || base_src=$osr
+base_id=$(sha256sum <"$base_src" | cut -d' ' -f1)
+recipe_id=$(cd "$recipe" && find . \( -type f -o -type l \) | LC_ALL=C sort | while read -r f; do
+    if [ -L "$f" ]; then printf '%s link %s\n' "$f" "$(readlink "$f")"; continue; fi
+    x=0; [ ! -x "$f" ] || x=1
+    printf '%s %s %s\n' "$f" "$x" "$(sha256sum <"$f" | cut -d' ' -f1)"
+done | sha256sum | cut -d' ' -f1)
+os_var() { (. "$osr"; eval "printf '%s' \"\${$1:-}\""); }
+level=$(os_var SYSEXT_LEVEL)
+now=$(date +%s)
+
+record=$AGENT_LAYERS/$name.build.json
+reason=
+if [ "$force" = true ]; then reason=forced
+elif [ ! -f "$record" ] || [ ! -f "$AGENT_LAYERS/$name.raw" ] || [ ! -f "$AGENT_LAYERS/$name-etc.raw" ]; then reason='no record'
+elif [ "$(jq -r .slot "$record")" != "$slot" ]; then reason='slot changed'
+elif [ "$(jq -r .recipe_id "$record")" != "$recipe_id" ]; then reason='recipe changed'
+elif [ "$(jq -r .base_id "$record")" != "$base_id" ]; then reason='base changed'
+elif [ $((now - $(jq -r .built_epoch "$record"))) -gt "$max_age" ]; then reason="older than $((max_age / 86400))d"
+fi
+if [ -z "$reason" ]; then
+    echo "agent-layer > $name up to date (built $(jq -r '.built_at[:16]' "$record"))"
+    exit 0
+fi
+echo "agent-layer > building $name: $reason"
+
+b=$AGENT_LAYERS/.build/$name
+mkdir -p "$AGENT_LAYERS/.build"
+exec 9>"$AGENT_LAYERS/.build/$name.lock"
+flock 9
+fail() { rm -f "$AGENT_LAYERS"/.$name*.new; die "$* (evidence kept in $b)"; }
+rmtree "$b"; mkdir -p "$b/tmp" "$b/out"
+cp -a "$recipe" "$b/recipe"
+extra=$b/recipe/mkosi.extra
+id=$(os_var ID)
+rel() { # <file> <level-key> <level>
+    mkdir -p "$(dirname "$extra/$1")"
+    [ ! -e "$extra/$1" ] || echo "agent-layer > note: recipe shipped $1; overwriting"
+    printf 'ID=%s\n%s=%s\n' "$id" "$2" "$3" >"$extra/$1"
+}
+rel "usr/lib/extension-release.d/extension-release.$slot" SYSEXT_LEVEL "$level"
+rel "etc/extension-release.d/extension-release.$slot-etc" CONFEXT_LEVEL "$(os_var CONFEXT_LEVEL)"
+
+# One tools tree per base snapshot, reused by every build: building it costs ~70 s, reusing 14 s.
+# mkosi builds it into the recipe copy (mkosi.tools); the first build keeps it here afterwards.
+# TODO: trees of old snapshots are not cleaned up yet.
+snapshot=$(echo "$level" | tr . /)
+tools=$AGENT_LAYERS/.tools/$level
+if [ -d "$tools" ]; then tools_arg=--tools-tree=$tools
+else tools_arg=--tools-tree-snapshot=$snapshot; tools=
+fi
+export TMPDIR=$b/tmp
+unshare -rm mkosi -C "$b/recipe" --base-tree="$AGENT_BASE" --format=directory --overlay=yes \
+    --snapshot="$snapshot" "$tools_arg" --output="$name" --output-directory="$b/out" \
+    --workspace-directory="$b/tmp" --manifest-format=json build || fail 'mkosi failed'
+if [ -z "$tools" ] && [ -d "$b/recipe/mkosi.tools" ]; then
+    dest=$AGENT_LAYERS/.tools/$level
+    mkdir -p "$AGENT_LAYERS/.tools"
+    # renaming a directory needs write on the directory itself; a concurrent build may have won
+    chmod u+w "$b/recipe" "$b/recipe/mkosi.tools"
+    if [ ! -e "$dest" ] && mv "$b/recipe/mkosi.tools" "$dest"; then tools=$dest; fi
+fi
+defs=${AGENT_REPART_DEFINITIONS:-$(python3 -c 'import mkosi, os; print(os.path.dirname(mkosi.__file__))')/resources/repart/definitions}
+for kind in sysext:"" confext:-etc; do
+    unshare -r systemd-repart --definitions="$defs/${kind%%:*}-unsigned.repart.d" --copy-source="$b/out/$name" \
+        --empty=create --size=auto --dry-run=no "$AGENT_LAYERS/.$name${kind#*:}.raw.new" || fail 'systemd-repart failed'
+done
+
+manifest=$b/out/$name.manifest
+packages='[]'
+if [ -f "$manifest" ]; then
+    base_pkgs=null
+    [ ! -f "$AGENT_BASE.manifest" ] || base_pkgs=$(jq -c '[.packages[] | {name, version}]' "$AGENT_BASE.manifest")
+    packages=$(jq -c --argjson base "$base_pkgs" \
+        '[.packages[] | {name, version}] - ($base // [])' "$manifest") || fail 'unreadable manifest'
+fi
+versions='[]'
+vf=$b/out/$name/usr/share/agent-layer/versions
+[ ! -f "$vf" ] || versions=$(jq -R . <"$vf" | jq -sc .)
+jq -n --arg recipe_id "$recipe_id" --arg base_id "$base_id" --arg level "$level" --arg slot "$slot" --arg tools "$tools" \
+    --arg at "$(date -u -d "@$now" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)" --argjson epoch "$now" \
+    --argjson packages "$packages" --argjson versions "$versions" \
+    '{recipe_id: $recipe_id, base_id: $base_id, base_sysext_level: $level, slot: $slot,
+      tools_tree: (if $tools == "" then null else $tools end),
+      built_at: $at, built_epoch: $epoch, packages: $packages, versions: $versions}' >"$AGENT_LAYERS/.$name.build.json.new" ||
+    fail 'cannot write record'
+mv "$AGENT_LAYERS/.$name.raw.new" "$AGENT_LAYERS/$name.raw"
+mv "$AGENT_LAYERS/.$name-etc.raw.new" "$AGENT_LAYERS/$name-etc.raw"
+mv "$AGENT_LAYERS/.$name.build.json.new" "$record"
+rmtree "$b"
+echo "agent-layer > built $name ($(jq '.packages | length' "$record") new packages)"
