@@ -2,7 +2,7 @@
 # checkout with `makepkg -si`. pacman's systemd hooks create the user and run
 # directory and reload the manager, so the package is only its files.
 pkgname=agent-sandbox-system
-pkgver=r57.578354a
+pkgver=r62.4f6dc91
 pkgrel=1
 pkgdesc='systemd session unit, polkit rule, user and run directory for agent-sandbox'
 arch=(any)
