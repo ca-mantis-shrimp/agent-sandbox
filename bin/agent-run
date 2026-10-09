@@ -29,11 +29,13 @@ unit=$(agent_unit "$ws")
 run="$(runs_dir)/$ws"
 [ "$(jq -r .state "$run/manifest.json" 2>/dev/null)" = ready ] && [ -d "$run/work" ] ||
     { say "$ws is not a ready workspace (landed, failed, or unknown)"; exit 1; }
-. "$run/agents/models.env"
+# Only the installed checkout is trusted for host-side shell code.
+. "$tool/agents/models.env"
 if [ -z "$model" ]; then
     case "$harness" in claude) model=$AGENT_CLAUDE_MODEL ;; pi) model=$AGENT_PI_MODEL ;; esac
 fi
-exec 9>"$run/.lock"
+lock=$(agent_lock_path "$ws")
+exec 9>"$lock"
 flock 9
 if agent_unit_active "$ws"; then
     say "$unit is still active; only one session per workspace may run"

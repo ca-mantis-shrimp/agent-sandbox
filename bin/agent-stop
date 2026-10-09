@@ -20,7 +20,8 @@ only=$(ref_session "$ref")
 run="$(runs_dir)/$ws"
 test -d "$run/sessions" || { echo "agent-stop > no workspace $ws" >&2; exit 1; }
 
-exec 9>"$run/.lock"
+lock=$(agent_lock_path "$ws")
+exec 9>"$lock"
 flock 9
 stopped=0
 for n in ${only:-$(running_sessions "$run")}; do

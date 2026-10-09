@@ -5,10 +5,10 @@ Run headless agents in disposable systemd sandboxes on your own hardware. Git is
 ## Workspaces, agents and sessions
 
 - A **workspace** is a clone of the repository you run `agent-new` in, at its HEAD, with each repo on `agent/<workspace>` and `refs/agent/base` marking its starting point. It holds a harness snapshot and records, and lasts across sessions until landed or discarded.
-- An **agent** is a harness plus a model, chosen per session (`--harness claude|pi`, `--model <id>`). Defaults live in `agents/models.env`; `AGENT_HARNESS`, `AGENT_CLAUDE_MODEL` and `AGENT_PI_MODEL` override them.
+- An **agent** is a harness plus a model, chosen per session (`--harness claude|pi`, `--model <id>`). Defaults are read from the installed tool checkout's `agents/models.env`, never the writable workspace snapshot; `AGENT_HARNESS`, `AGENT_CLAUDE_MODEL` and `AGENT_PI_MODEL` override them.
 - A **session** is one agent on one prompt in one workspace: the system-manager unit `agent@<workspace>.service` and one `sessions/<n>.json` record. A worker, a reviewer from another vendor and a fixer can be successive sessions seeing the same commits.
 
-One session at a time per workspace, including read-only sessions. Work belonging together goes in one workspace, as sessions (`--in`). Parallel workspaces should cover separate areas: independent clones otherwise conflict or start without each other's unlanded work. The human's review time is the limit: at most two unreviewed workspaces. While a session works, the orchestrator works on something that does not overlap.
+One session at a time per workspace, including read-only sessions. Host commands share a lock at `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agent-sandbox/<workspace>.lock`, outside the agent-writable run directory. Work belonging together goes in one workspace, as sessions (`--in`). Parallel workspaces should cover separate areas: independent clones otherwise conflict or start without each other's unlanded work. The human's review time is the limit: at most two unreviewed workspaces. While a session works, the orchestrator works on something that does not overlap.
 
 ## Install
 
@@ -79,7 +79,7 @@ Run these from the host, not inside an agent session.
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
 
-`AGENT_SESSION_USD` defaults to $3 per session. The static unit defaults to a six-hour deadline, 60-second stop grace, 8 CPUs and 16G memory with no swap. Limits belong to the host: use unit overrides or `systemctl set-property` for a workspace, not runner-generated units. Follow a session with `journalctl -u agent@<workspace>.service -f`. Starts and stops use the system manager with `--no-ask-password`, never the user manager.
+`AGENT_SESSION_USD` defaults to $3 per session. The static unit defaults to a six-hour deadline, 60-second stop grace, and per-session limits of 8 CPUs and 16G memory with no swap. CPU and memory limits are the unit's defaults; `AGENT_CPUS` and `AGENT_MEMORY` are gone. Limits belong to the host: use unit overrides for defaults, or override one run with `systemctl set-property agent@<workspace>.service CPUQuota=400% MemoryMax=8G`, not runner-generated units. Follow a session with `journalctl -u agent@<workspace>.service -f`. Starts and stops use the system manager with `--no-ask-password`, never the user manager.
 
 ## Review, fix and land
 
@@ -97,6 +97,8 @@ Run these from the host, not inside an agent session.
 6. Run `agent-harvest <workspace>` when no session is running; it fetches branches in each repo and shows commits and closing messages without merging. Harvest again after further sessions.
 7. Run `agent-land <workspace>`. It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
 8. Record the human's landing judgment with `agent-verdict`; then push separately.
+
+The landing gate runs the branch's `.sandbox/setup` and gate in the same unit template as sessions, so it can read the Claude credential and pi's shared login. For our own work, the branch was written by agent sessions that already held both, so this adds no credential exposure. If gates ever run code from elsewhere, give them their own unit without the credential and the login.
 
 A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate clone, retaining records, transcripts and the candidate's home/cache.
 

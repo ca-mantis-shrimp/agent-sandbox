@@ -41,9 +41,11 @@ gate_run="$(runs_dir)/$gate_ws"
 cand="$gate_run/work"
 unit=$(agent_unit "$gate_ws")
 mkdir -p "$run" "$gate_run"
-exec 9>"$run/.lock"
+lock=$(agent_lock_path "$id")
+gate_lock=$(agent_lock_path "$gate_ws")
+exec 9>"$lock"
 flock 9
-exec 8>"$gate_run/.lock"
+exec 8>"$gate_lock"
 flock 8
 agent_unit_active "$id" && { echo "agent-land > session still active in $id" >&2; exit 1; }
 agent_unit_active "$gate_ws" && { echo "agent-land > $unit is still active" >&2; exit 1; }

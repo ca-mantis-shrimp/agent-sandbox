@@ -20,7 +20,8 @@ run="$(runs_dir)/$ws"
 test -f "$run/manifest.json" || { echo "agent-reconcile > no workspace $ws" >&2; exit 1; }
 
 if [ "${AGENT_WORKSPACE_LOCKED:-}" != "$ws" ]; then
-    exec 9>"$run/.lock"
+    lock=$(agent_lock_path "$ws")
+    exec 9>"$lock"
     flock 9
 fi
 status=0

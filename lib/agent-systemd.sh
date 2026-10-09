@@ -6,6 +6,16 @@ agent_unit() { # <workspace>
     printf 'agent@%s.service\n' "$1"
 }
 
+# Host-only locks must never be reachable through the writable run directory.
+# Keep files across invocations: unlinking a held lock would split the lock.
+agent_lock_path() ( # <workspace>
+    agent_unit "$1" >/dev/null || exit 1
+    umask 077
+    dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agent-sandbox"
+    mkdir -p "$dir"
+    printf '%s/%s.lock\n' "$dir" "$1"
+)
+
 unit_state_running() { # <ActiveState>
     case "$1" in inactive | failed) return 1 ;; *) return 0 ;; esac
 }
@@ -24,6 +34,9 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
     set -eu
     umask 002
     run=$1 repo_name=$(basename "$2")
+    if [ -e "$run/work/.sandbox/volumes" ]; then
+        echo 'agent-sandbox > .sandbox/volumes is no longer read; .sandbox/setup points tools at /srv/cache' >&2
+    fi
     : "${AGENT_BASE:?AGENT_BASE must name the host base tree}"
     : "${AGENT_LAYERS:?AGENT_LAYERS must name the host image directory}"
     [ -d "$AGENT_BASE" ] || { echo "agent-sandbox > missing base tree: $AGENT_BASE" >&2; exit 1; }

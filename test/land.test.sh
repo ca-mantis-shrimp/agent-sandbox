@@ -13,7 +13,7 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export AGENT_RUNS="$tmp/runs" GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localhost \
     GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@localhost
-export AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/images"
+export AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/images" XDG_RUNTIME_DIR="$tmp/runtime"
 mkdir -p "$AGENT_BASE" "$AGENT_LAYERS" "$tmp/bin"
 touch "$AGENT_LAYERS/harness.raw" "$AGENT_LAYERS/fixture.raw" "$AGENT_LAYERS/plain.raw"
 printf '%s\n' '#!/bin/sh' \
@@ -103,7 +103,17 @@ grep -q "moved since the candidate was built" "$tmp/land.log"
 # --- a green gate lands, pins the merged submodule, and cleans up -------------
 
 workspace green
+# An agent holding either legacy lock cannot prevent host landing.
+mkdir -p "$AGENT_RUNS/green" "$AGENT_RUNS/land-green"
+exec 7>"$AGENT_RUNS/green/.lock"
+exec 6>"$AGENT_RUNS/land-green/.lock"
+flock 7
+flock 6
 land green
+[ -f "$XDG_RUNTIME_DIR/agent-sandbox/green.lock" ]
+[ -f "$XDG_RUNTIME_DIR/agent-sandbox/land-green.lock" ]
+flock -u 7
+flock -u 6
 sub_head=$(head_of "$root/sub")
 fails git -C "$root/sub" merge-base --is-ancestor agent/red HEAD
 [ "$(cat "$root/sub/state")" = green ]
