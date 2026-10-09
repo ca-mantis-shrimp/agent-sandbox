@@ -1,8 +1,9 @@
 # One agent session in workspace %i. Everything per run is data in the run
 # directory, /var/lib/agent-runs/%i:
 #   root         link to the base tree the session runs on
-#   layers/      optional extension trees overlaid on it, bottom to top:
-#                harness (the agents), then project (its toolchain)
+#   layers/      optional extension images (sysext DDIs) stacked on it, bottom
+#                to top: harness.raw (the agents), then project.raw (its
+#                toolchain); each carries extension-release.<its slot name>
 #   run.env      AGENT_HARNESS, AGENT_MODEL, AGENT_SESSION, AGENT_SESSION_USD
 #   agents/      the session entry point, read-only
 #   work/        the clone the agent works in
@@ -20,7 +21,7 @@ User=agent
 Group=agents
 UMask=0002
 RootDirectory=/var/lib/agent-runs/%i/root
-ExtensionDirectories=-/var/lib/agent-runs/%i/layers/harness -/var/lib/agent-runs/%i/layers/project
+ExtensionImages=-/var/lib/agent-runs/%i/layers/harness.raw -/var/lib/agent-runs/%i/layers/project.raw
 BindPaths=/var/lib/agent-runs/%i:/job/%i
 BindReadOnlyPaths=/var/lib/agent-runs/%i/agents:/agents
 BindReadOnlyPaths=/run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
