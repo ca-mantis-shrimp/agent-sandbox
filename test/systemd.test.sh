@@ -21,10 +21,17 @@ fails agent_lock_path '../bad'
 [ "$(unset XDG_RUNTIME_DIR; mkdir() { :; }; agent_lock_path ws)" = "/run/user/$(id -u)/agent-sandbox/ws.lock" ]
 fails write_agent_run "$run" /repo/example claude model 1 false 2>"$tmp/error"
 grep -qF "$AGENT_LAYERS/harness.raw" "$tmp/error"
+# Without a project layer a run still starts, on base + harness, and says so once.
 touch "$AGENT_LAYERS/harness.raw"
-fails write_agent_run "$run" /repo/example claude model 1 false 2>"$tmp/error"
-grep -qF "$AGENT_LAYERS/example.raw" "$tmp/error"
+write_agent_run "$run" /repo/example claude model 1 false 2>"$tmp/error"
+[ "$(cat "$tmp/error")" = 'agent-sandbox > no project layer for example; running on base + harness' ]
+[ "$(readlink "$run/layers/harness.raw")" = "$AGENT_LAYERS/harness.raw" ]
+[ ! -e "$run/layers/project.raw" ] && [ ! -L "$run/layers/project.raw" ]
+[ ! -L "$run/layers/project-etc.raw" ]
+# With one, the run links it and stays quiet.
 touch "$AGENT_LAYERS/example.raw" "$AGENT_LAYERS/example-etc.raw"
+write_agent_run "$run" /repo/example claude model 1 false 2>"$tmp/error"
+[ ! -s "$tmp/error" ]
 AGENT_SESSION_USD=5 write_agent_run "$run" /repo/example claude 'a "model"' 1 true
 [ "$(readlink "$run/root")" = "$AGENT_BASE" ]
 [ "$(readlink "$run/cache")" = "$AGENT_RUNS/.cache/example" ]

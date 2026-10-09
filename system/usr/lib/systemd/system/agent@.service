@@ -2,7 +2,8 @@
 # directory, /var/lib/agent-runs/%i:
 #   root         link to the base tree the session runs on
 #   layers/      optional extension images stacked on it, bottom to top:
-#                harness.raw (the agents), then project.raw (its toolchain).
+#                harness.raw (the agents), then project.raw (its toolchain, if the
+#                repository needs one).
 #                A layer's /etc files ship beside it as a confext,
 #                <slot>-etc.raw, since a sysext carries only /usr and /opt.
 #                Each image carries extension-release.<its file name>.

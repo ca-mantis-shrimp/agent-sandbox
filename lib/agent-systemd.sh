@@ -40,11 +40,11 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
     : "${AGENT_BASE:?AGENT_BASE must name the host base tree}"
     : "${AGENT_LAYERS:?AGENT_LAYERS must name the host image directory}"
     [ -d "$AGENT_BASE" ] || { echo "agent-sandbox > missing base tree: $AGENT_BASE" >&2; exit 1; }
-    for image in harness "$repo_name"; do
-        [ -f "$AGENT_LAYERS/$image.raw" ] || {
-            echo "agent-sandbox > missing layer: $AGENT_LAYERS/$image.raw" >&2; exit 1;
-        }
-    done
+    [ -f "$AGENT_LAYERS/harness.raw" ] || {
+        echo "agent-sandbox > missing layer: $AGENT_LAYERS/harness.raw" >&2; exit 1;
+    }
+    [ -f "$AGENT_LAYERS/$repo_name.raw" ] ||
+        echo "agent-sandbox > no project layer for $repo_name; running on base + harness" >&2
     mkdir -p "$run/work" "$run/home" "$run/agents" "$run/pi" "$run/layers" "$(runs_dir)/.cache/$repo_name"
     ln -sfn /srv/pi-login/auth.json "$run/pi/auth.json"
     ln -sfn "$AGENT_BASE" "$run/root"
