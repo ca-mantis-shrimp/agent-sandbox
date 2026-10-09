@@ -13,7 +13,7 @@ case "$version" in
     ''|*[!0-9]*) missing "systemd 257 or newer (found ${version:-none})" ;;
     *) if [ "$version" -ge 257 ]; then ok "systemd $version"; else missing "systemd 257 or newer (found $version)"; fi ;;
 esac
-if [ "$(systemctl show agent@.service -p LoadState --value 2>/dev/null)" = loaded ]; then
+if [ "$(systemctl show agent@doctor.service -p LoadState --value 2>/dev/null)" = loaded ]; then
     ok 'agent@.service installed'
 else
     missing 'agent@.service not installed'
@@ -27,5 +27,5 @@ else missing "AGENT_BASE tree (${AGENT_BASE:-unset})"; fi
 if [ -n "${AGENT_LAYERS:-}" ] && [ -f "$AGENT_LAYERS/harness.raw" ]; then ok "harness layer $AGENT_LAYERS/harness.raw"
 else missing "AGENT_LAYERS/harness.raw (${AGENT_LAYERS:-unset})"; fi
 if [ -r /etc/credstore/agent.claude_token ]; then ok '/etc/credstore/agent.claude_token readable'
-else note '/etc/credstore/agent.claude_token missing or unreadable: Claude sessions need the host credential'; fi
+else note '/etc/credstore/agent.claude_token cannot be checked from this user (the credstore is root-only); Claude sessions need the host credential'; fi
 exit "$failed"
