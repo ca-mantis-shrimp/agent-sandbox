@@ -45,17 +45,26 @@ workspace_repo() { # <workspace-dir>
 held_workspaces() ( # <repository>
     held_repo=$(git -C "$1" rev-parse --show-toplevel) || exit 2
     held_repo=$(CDPATH= cd -- "$held_repo" && pwd -P) || exit 2
-    held=1
-    for held_dir in "$(runs_dir)"/*/; do
+    # 3 is the sole positive not-held answer; ordinary shell failures use 1.
+    held=3
+    held_runs=$(runs_dir) || exit 2
+    if [ -e "$held_runs" ]; then
+        [ -d "$held_runs" ] && [ -r "$held_runs" ] && [ -x "$held_runs" ] || exit 2
+    fi
+    for held_dir in "$held_runs"/*/; do
+        [ -d "$held_dir" ] || continue
+        [ -r "$held_dir" ] && [ -x "$held_dir" ] || exit 2
         [ -f "$held_dir/manifest.json" ] || continue
         origin=$(workspace_repo "$held_dir") || exit 2
-        origin=$(CDPATH= cd -- "$origin" 2>/dev/null && pwd -P) || continue
+        case "$origin" in /*) ;; *) echo 'agent-sandbox > manifest repo must be absolute' >&2; exit 2 ;; esac
+        origin=$(CDPATH= cd -- "$origin" 2>/dev/null && pwd -P) || exit 2
         [ "$origin" = "$held_repo" ] || continue
         live_sessions=$(running_sessions "$held_dir") || exit 2
         [ -n "$live_sessions" ] || continue
         held_id=$(basename "$held_dir")
-        if agent_unit_active "$held_id"; then
-            printf '%s\n' "$held_id"
+        held_state=$(agent_unit_state "$held_id") || exit 2
+        if unit_state_running "$held_state"; then
+            printf '%s\t%s\n' "$held_id" "$held_state"
             held=0
         fi
     done
@@ -76,8 +85,16 @@ ref_session() { # <ref> -> n, or empty when the ref names the whole workspace
 
 # The numbers of the sessions whose record says they are running.
 running_sessions() { # <workspace-dir>
+    if [ -e "$1/sessions" ]; then
+        [ -d "$1/sessions" ] && [ -r "$1/sessions" ] && [ -x "$1/sessions" ] || return 1
+    fi
     for f in "$1"/sessions/*.json; do
-        [ -f "$f" ] && jq -r 'select(.state == "running") | .n' "$f"
+        if [ ! -e "$f" ] && [ ! -L "$f" ]; then continue; fi
+        [ -f "$f" ] || return 1
+        jq -sr 'if length != 1 then error("expected one session record")
+            else .[0] | if type != "object" or (.state | type) != "string"
+                then error("invalid session record")
+                elif .state == "running" then .n else empty end end' "$f" || return 1
     done
     return 0
 }

@@ -20,8 +20,14 @@ unit_state_running() { # <ActiveState>
     case "$1" in inactive | failed) return 1 ;; *) return 0 ;; esac
 }
 
+agent_unit_state() { # <workspace>; a failed query is never proof of a stop
+    unit=$(agent_unit "$1") || return 1
+    state=$(systemctl show "$unit" -p ActiveState --value 2>/dev/null) || state=
+    printf '%s\n' "${state:-unavailable}"
+}
+
 agent_unit_active() { # <workspace>; silence during manager re-exec is not a stop
-    unit_state_running "$(systemctl show "$(agent_unit "$1")" -p ActiveState --value 2>/dev/null)"
+    unit_state_running "$(agent_unit_state "$1")"
 }
 
 agent_unit_props() { # <workspace>
