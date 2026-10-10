@@ -39,6 +39,29 @@ workspace_repo() { # <workspace-dir>
     printf '%s\n' "$repo"
 }
 
+# Print workspaces holding <repository>. Inspect host paths and unit state only,
+# never run Git in a workspace clone. Needs agent-systemd.sh. A stale running
+# record does not hold a repo after its unit stops; manager silence is not a stop.
+held_workspaces() ( # <repository>
+    held_repo=$(git -C "$1" rev-parse --show-toplevel) || exit 2
+    held_repo=$(CDPATH= cd -- "$held_repo" && pwd -P) || exit 2
+    held=1
+    for held_dir in "$(runs_dir)"/*/; do
+        [ -f "$held_dir/manifest.json" ] || continue
+        origin=$(workspace_repo "$held_dir") || exit 2
+        origin=$(CDPATH= cd -- "$origin" 2>/dev/null && pwd -P) || continue
+        [ "$origin" = "$held_repo" ] || continue
+        live_sessions=$(running_sessions "$held_dir") || exit 2
+        [ -n "$live_sessions" ] || continue
+        held_id=$(basename "$held_dir")
+        if agent_unit_active "$held_id"; then
+            printf '%s\n' "$held_id"
+            held=0
+        fi
+    done
+    exit "$held"
+)
+
 # A reference is <workspace> or <workspace>/<n>.
 ref_workspace() { # <ref>
     printf '%s\n' "${1%%/*}"

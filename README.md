@@ -84,6 +84,8 @@ Run these from the host, not inside an agent session.
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
 | see workspaces or recent tool calls | `agent-status [<workspace> [n]]` |
+| check whether a repository is held | `agent-status --held <repo-path>` |
+| explicitly install the host commit guard | `agent-doctor --install-hooks <repo-path>` |
 | check this host's setup | `agent-doctor` |
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
@@ -91,6 +93,36 @@ Run these from the host, not inside an agent session.
 Host commands never run Git in agent-writable clones. Writers export plain data inside the sandbox; harvest fetches bundles into real repositories. Missing or invalid commit exports are reported as JSON `null` (unknown), and harvest/land refuse them. Read-only and gate sessions do not export. Harvest and land require the latest writer's valid export, never an older writer's: SIGKILL or OOM can prevent the EXIT trap from exporting. If they report `session <n> left no export (killed?)`, run a short writer to export the retained commits, for example `agent-run --in <ws> --prompt "Commit nothing; end."`, then harvest again. Bundles are named `root.bundle` for the root and `sm-<URI-encoded-path>.bundle` for submodules.
 
 `AGENT_SESSION_USD` defaults to $3 per session. The static unit defaults to a six-hour deadline, 60-second stop grace, and per-session limits of 8 CPUs and 16G memory with no swap. CPU and memory limits are the unit's defaults; `AGENT_CPUS` and `AGENT_MEMORY` are gone. Limits belong to the host: use unit overrides for defaults, or override one run with `systemctl set-property agent@<workspace>.service CPUQuota=400% MemoryMax=8G`, not runner-generated units. Follow a session with `journalctl -u agent@<workspace>.service -f`. Starts and stops use the system manager with `--no-ask-password`, never the user manager.
+
+## Host commit guard
+
+Do not edit a project's tracked files on the host while a session holds it.
+`agent-status --held <repo-path>` prints the holding workspace ids, one per line,
+and exits **0 when held**, **1 when not held**, or **2 for invalid input/check errors**.
+Paths inside the repository and symlink aliases resolve to the same checkout.
+Both writers and read-only sessions hold the repository. Running records are
+checked against the unit: stopped units release stale holds; unavailable manager
+state conservatively retains them. No sessions means no hold and no unit query.
+
+Opt in separately in each **host clone**:
+
+```sh
+agent-doctor --install-hooks /path/to/repository
+```
+
+This installs an executable `pre-commit` hook at Git's hooks path (honoring
+`core.hooksPath`), refuses to replace an existing different hook, and is safe to
+repeat. It never installs silently or into workspace snapshots. The host's Git
+process must have the sandbox's `bin/` on `PATH`. The hook names every holding
+workspace and refuses the commit; check failures also refuse rather than silently
+allowing a commit. Only the human's explicit `git commit --no-verify` bypasses it;
+there is no sandbox bypass setting.
+
+This is a commit-time coordination guard, not a file lock: it does not prevent
+editing, and a session can start after the check. It tracks the host checkout
+named by the workspace manifest, not every independent clone of the same remote.
+It does not install a `merge=union` attribute for `.actions` files: a refused
+commit or merge conflict is preferable to a garbled action line.
 
 ## Review, fix and land
 
