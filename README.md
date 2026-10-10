@@ -5,7 +5,7 @@ Run headless agents in disposable systemd sandboxes on your own hardware. Git is
 ## Workspaces, agents and sessions
 
 - A **workspace** is a clone of the repository you run `agent-new` in, at its HEAD, with each repo on `agent/<workspace>` and `refs/agent/base` marking its starting point. It holds a harness snapshot and records, and lasts across sessions until landed or discarded.
-- An **agent** is a harness plus a model, chosen per session (`--harness claude|pi`, `--model <id>`). Defaults are read from the installed tool checkout's `agents/models.env`, never the writable workspace snapshot; `AGENT_HARNESS`, `AGENT_CLAUDE_MODEL` and `AGENT_PI_MODEL` override them.
+- An **agent** is a harness plus a model, chosen per session (`--harness claude|pi`, `--model <id>`). Defaults are read from the installed tool checkout's `agents/models.env`, never the writable workspace snapshot; `AGENT_HARNESS`, `AGENT_CLAUDE_MODEL`, `AGENT_PI_MODEL` and `AGENT_PI_PROVIDER` override them. Pi's provider defaults to `openai` beside its model in that file; set `AGENT_PI_PROVIDER` in the launching environment to choose another provider.
 - A **session** is one agent on one prompt in one workspace: the system-manager unit `agent@<workspace>.service` and one `sessions/<n>.json` record. A worker, a reviewer from another vendor and a fixer can be successive sessions seeing the same commits.
 
 One session at a time per workspace, including read-only sessions. Host commands share a lock at `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/agent-sandbox/<workspace>.lock`, outside the agent-writable run directory. Work belonging together goes in one workspace, as sessions (`--in`). Parallel workspaces should cover separate areas: independent clones otherwise conflict or start without each other's unlanded work. The human's review time is the limit: at most two unreviewed workspaces. While a session works, the orchestrator works on something that does not overlap.
@@ -31,7 +31,15 @@ The host provides:
 - For Claude, `/etc/credstore/agent.claude_token`. The unit imports it and `agents/session` exports `CLAUDE_CODE_OAUTH_TOKEN` from the systemd credential directory when present.
 - For pi, a host-managed shared login in `/var/lib/agent-runs/.pi`, mounted at `/srv/pi-login`. Each run's `pi/auth.json` links to `/srv/pi-login/auth.json`; the runner never copies the login. User-level settings and custom agents are snapshotted when present.
 
-`agent-doctor` checks the required host runtime, process group, base and harness layer, and reports a missing or unreadable Claude credential. A project's layer is checked on launch, with the missing path in the error. `agent-layer` builds layers; the runner still only checks that they exist.
+Create or renew the shared pi login **on the host** by running:
+
+```sh
+PI_CODING_AGENT_DIR=/var/lib/agent-runs/.pi pi
+```
+
+Then use `/login`. The browser's OAuth redirect to localhost reaches pi directly on the host. The provider name `/login` stores the token under must match `AGENT_PI_PROVIDER`; `agent-doctor` checks that provider's key in the shared `auth.json`. This is a separate sandbox login, never the host's own `~/.pi` login. The host declares `/var/lib/agent-runs/.pi` as `root:agents`, mode `2770`; after login or renewal, ensure `auth.json` belongs to group `agents` and remains group-readable and writable (for example, mode `0660`). Sessions refresh this file.
+
+`agent-doctor` checks the required host runtime, process group, base and harness layer, and reports a missing or unreadable Claude credential. It reports which pi provider it checked and fails if the shared login is unreadable, invalid JSON or lacks that provider's key. This read-only `jq` check requires no host pi installation and never refreshes OAuth tokens underneath running sessions; it does not prove the token is unexpired or accepted by the provider. A project's layer is checked on launch, with the missing path in the error. `agent-layer` builds layers; the runner still only checks that they exist.
 
 Workspaces are run directories at `$AGENT_RUNS/<workspace>/` (default **`/var/lib/agent-runs`**). `AGENT_RUNS` is overridable for tests; the installed unit hard-codes `/var/lib/agent-runs`, so a different path is not a live-host runtime option. Directories and records are created with umask 002 for the agents group; the host declares group ownership/inheritance.
 
@@ -42,7 +50,7 @@ Workspaces are run directories at `$AGENT_RUNS/<workspace>/` (default **`/var/li
 | `manifest.json` | workspace facts, including the repository it cloned |
 | `sessions/`, `prompts/`, `transcripts/` | per-session records, prompts and transcripts |
 | `exports/` | writer-session JSON (commit shas and dirty flags) and per-repo Git bundles |
-| `run.env` | harness, model, session number, optional spend cap |
+| `run.env` | harness, model, pi provider, session number, optional spend cap |
 | `root` | link to `AGENT_BASE` |
 | `layers/` | links to the required images and existing optional confext pairs |
 | `home/` | writable home, retained across sessions |

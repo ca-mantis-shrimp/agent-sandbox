@@ -31,11 +31,14 @@ unset CLAUDE_CODE_OAUTH_TOKEN
 mkdir -p "$PI_CODING_AGENT_DIR"
 printf '%s\n' '#!/bin/sh' \
     '[ "$PI_CODING_AGENT_DIR" = "$AGENT_JOB/pi" ] || exit 1' \
+    'printf "%s\n" "$@" >"$AGENT_JOB/pi-args"' \
     'echo '\''{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"pi done"}],"stopReason":"stop","usage":{"cost":{"total":0}}}}'\''' >"$tmp/bin/pi"
 chmod +x "$tmp/bin/pi"
-export AGENT_HARNESS=pi
+export AGENT_HARNESS=pi AGENT_PI_PROVIDER=test-provider
 "$tool/agents/session" 1
 jq -e '.ok and .closing == "pi done"' "$AGENT_JOB/sessions/1.json" >/dev/null
+[ "$(awk '/^--provider$/ {getline; print}' "$AGENT_JOB/pi-args")" = test-provider ]
+[ "$(awk '/^--model$/ {getline; print}' "$AGENT_JOB/pi-args")" = test ]
 
 # A writer that fails in setup still exports its committed work on EXIT.
 rm -rf "$AGENT_JOB/exports"
