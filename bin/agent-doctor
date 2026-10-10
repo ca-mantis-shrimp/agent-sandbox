@@ -27,7 +27,7 @@ else missing "AGENT_BASE tree (${AGENT_BASE:-unset})"; fi
 if [ -n "${AGENT_LAYERS:-}" ] && [ -f "$AGENT_LAYERS/harness.raw" ]; then ok "harness layer $AGENT_LAYERS/harness.raw"
 else missing "AGENT_LAYERS/harness.raw (${AGENT_LAYERS:-unset})"; fi
 if [ -r /etc/credstore/agent.claude_token ]; then ok '/etc/credstore/agent.claude_token readable'
-else note '/etc/credstore/agent.claude_token cannot be checked from this user (the credstore is root-only); Claude sessions need the host credential'; fi
+else note 'Claude sessions need /etc/credstore/agent.claude_token (plain) or /etc/credstore.encrypted/agent.claude_token (sealed with systemd-creds encrypt, e.g. to the TPM); neither root-only credstore can be checked from this user'; fi
 # Use the same installed defaults and launching-environment overrides as agent-run.
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/agents/models.env"

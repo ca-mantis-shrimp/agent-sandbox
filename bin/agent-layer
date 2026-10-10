@@ -96,10 +96,14 @@ tools=$AGENT_LAYERS/.tools/$level
 if [ -d "$tools" ]; then tools_arg=--tools-tree=$tools
 else tools_arg=--tools-tree-snapshot=$snapshot; tools=
 fi
+# Keep packages across build cleanup without relying on mkosi's uid-based default.
+# Per-layer caches are serialized by the existing build lock.
+package_cache=$AGENT_LAYERS/.cache/packages/$name
+mkdir -p "$package_cache"
 export TMPDIR=$b/tmp
 unshare -rm mkosi -C "$b/recipe" --base-tree="$AGENT_BASE" --format=directory --overlay=yes \
     --snapshot="$snapshot" "$tools_arg" --output="$name" --output-directory="$b/out" \
-    --workspace-directory="$b/tmp" --manifest-format=json build >>"$log" 2>&1 || fail 'mkosi failed'
+    --workspace-directory="$b/tmp" --package-cache-directory="$package_cache" --manifest-format=json build >>"$log" 2>&1 || fail 'mkosi failed'
 if [ -z "$tools" ] && [ -d "$b/recipe/mkosi.tools" ]; then
     dest=$AGENT_LAYERS/.tools/$level
     mkdir -p "$AGENT_LAYERS/.tools"

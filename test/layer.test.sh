@@ -16,9 +16,13 @@ cat >"$tmp/path/mkosi" <<'STUB'
 echo "$*" >>"$TEST_LOG"
 echo "mkosi chatter"; echo "mkosi stderr" >&2
 [ -z "${TEST_FAIL:-}" ] || exit 1
-tt= c=
+tt= c= package_cache=
 prev=
-for a; do [ "$prev" != -C ] || c=$a; prev=$a; case "$a" in --output-directory=*) out=${a#*=} ;; --output=*) n=${a#*=} ;; --tools-tree=*) tt=1 ;; esac; done
+for a; do [ "$prev" != -C ] || c=$a; prev=$a; case "$a" in --output-directory=*) out=${a#*=} ;; --output=*) n=${a#*=} ;; --tools-tree=*) tt=1 ;; --package-cache-directory=*) package_cache=${a#*=} ;; esac; done
+# The cache must be ready before mkosi, with no fallback to /var/cache or XDG.
+[ "$package_cache" = "$AGENT_LAYERS/.cache/packages/$n" ] || exit 1
+[ -d "$package_cache" ] && [ -w "$package_cache" ] || exit 1
+echo cached >"$package_cache/probe"
 # like mkosi: without a tools tree it builds one into the recipe, read-only
 if [ -z "$tt" ]; then mkdir -p "$c/mkosi.tools/usr"; echo tool >"$c/mkosi.tools/usr/tool"; chmod -R a-w "$c/mkosi.tools"; fi
 mkdir -p "$out/$n/usr/share/agent-layer"
@@ -29,6 +33,7 @@ printf '%s\n' '#!/bin/sh' 'for a; do last=$a; done; echo image >"$last"' >"$tmp/
 chmod +x "$tmp/path/unshare" "$tmp/path/mkosi" "$tmp/path/systemd-repart"
 export PATH="$tmp/path" AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/layers" TEST_LOG="$tmp/log"
 export AGENT_REPART_DEFINITIONS="$tmp/defs"
+unset XDG_CACHE_HOME CACHE_DIRECTORY
 echo '{"packages":[{"name":"bash","version":"5"}]}' >"$tmp/base.manifest"
 cp "$tmp/base.manifest" "$tmp/base.manifest.json" && mv "$tmp/base.manifest.json" "$AGENT_BASE.manifest"
 layer() { /bin/sh "$tool/bin/agent-layer" "$@"; }
@@ -40,6 +45,8 @@ grep -q 'building h: no record' "$tmp/out"
 ! grep -qv "^agent-layer > " "$tmp/out" "$tmp/err"
 grep -q 'mkosi chatter' "$AGENT_LAYERS/.build/h.log"
 [ -f "$AGENT_LAYERS/h.raw" ] && [ -f "$AGENT_LAYERS/h-etc.raw" ] && [ ! -d "$AGENT_LAYERS/.build/h" ]
+grep -q -- "--package-cache-directory=$AGENT_LAYERS/.cache/packages/h" "$tmp/log"
+[ -s "$AGENT_LAYERS/.cache/packages/h/probe" ]
 grep -q -- '--snapshot=2026/10/04' "$tmp/log"
 grep -q -- '--tools-tree-snapshot=2026/10/04' "$tmp/log"
 ! grep -q -- '--tools-tree=' "$tmp/log"
