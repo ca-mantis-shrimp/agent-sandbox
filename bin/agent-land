@@ -74,6 +74,46 @@ pending() { # <repo-dir>: the workspace's branch exists here and is not merged y
         ! git -C "$1" merge-base --is-ancestor "$branch" HEAD
 }
 
+# Tests: commits lock every path they touch against later non-Tests: commits.
+# Use Git's quoted path output, not shell words: spaces and newlines in names
+# must compare exactly. Ancestry, not timestamps or log order, defines later.
+check_tests_lock() ( # <repo-dir> <display name>
+    dir=$1 label=$2
+    git -C "$dir" rev-parse -q --verify "refs/heads/$branch" >/dev/null || exit 0
+    base=$(git -C "$dir" merge-base HEAD "$branch")
+    commits=$(git -C "$dir" rev-list "$base..$branch")
+    bad=false
+    for tests in $commits; do
+        subject=$(git -C "$dir" show -s --format=%s "$tests")
+        case "$subject" in Tests:*) ;; *) continue ;; esac
+        locked=$(git -C "$dir" -c core.quotePath=true diff-tree --root -m \
+            --no-commit-id --name-only --no-renames -r "$tests")
+        [ -n "$locked" ] || continue
+        for later in $commits; do
+            [ "$later" != "$tests" ] || continue
+            subject=$(git -C "$dir" show -s --format=%s "$later")
+            case "$subject" in Tests:*) continue ;; esac
+            git -C "$dir" merge-base --is-ancestor "$tests" "$later" || continue
+            changed=$(git -C "$dir" -c core.quotePath=true diff-tree --root -m \
+                --no-commit-id --name-only --no-renames -r "$later")
+            while IFS= read -r file; do
+                [ -n "$file" ] || continue
+                while IFS= read -r path; do
+                    [ "$file" = "$path" ] || continue
+                    say "$label: Tests: lock violated: $file; locked by $tests; changed by $later ($subject)"
+                    bad=true
+                    break
+                done <<EOF
+$changed
+EOF
+            done <<EOF
+$locked
+EOF
+        done
+    done
+    [ "$bad" = false ]
+)
+
 # Clone the real checkout, each repo on its real branch's name so merge
 # messages read as before, and mark where each started: refs/agent/land-base.
 build_candidate() {
@@ -236,6 +276,11 @@ if [ -f "$run/manifest.json" ]; then
     fi
 fi
 check_harvested
+# Check all harvested repos before even merging a submodule into the candidate.
+for sm in . $submodules; do
+    check_tests_lock "$repo/$sm" "$(name "$sm")" ||
+        stop "Tests: lock refused $branch; no merges attempted"
+done
 # A gated candidate is forever untrusted. Remember tips in the real repos.
 recorded=true
 for sm in . $submodules; do
