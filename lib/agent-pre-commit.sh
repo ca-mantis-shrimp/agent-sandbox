@@ -1,6 +1,7 @@
 #!/bin/sh
 # Installed explicitly by agent-doctor --install-hooks. Host PATH declares tools.
-held=$(agent-status --held .)
+tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd) || exit 1
+held=$("$tool/bin/agent-status" --held .)
 status=$?
 case "$status" in
     0)

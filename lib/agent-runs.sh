@@ -59,7 +59,7 @@ held_workspaces() ( # <repository>
         case "$origin" in /*) ;; *) echo 'agent-sandbox > manifest repo must be absolute' >&2; exit 2 ;; esac
         origin=$(CDPATH= cd -- "$origin" 2>/dev/null && pwd -P) || exit 2
         [ "$origin" = "$held_repo" ] || continue
-        live_sessions=$(running_sessions "$held_dir") || exit 2
+        live_sessions=$(running_sessions "$held_dir" writers) || exit 2
         [ -n "$live_sessions" ] || continue
         held_id=$(basename "$held_dir")
         held_state=$(agent_unit_state "$held_id") || exit 2
@@ -84,17 +84,20 @@ ref_session() { # <ref> -> n, or empty when the ref names the whole workspace
 }
 
 # The numbers of the sessions whose record says they are running.
-running_sessions() { # <workspace-dir>
+# Optional writers filter excludes explicit readers, not legacy records.
+# Validate every record even when it would not pass the filter.
+running_sessions() { # <workspace-dir> [writers]
     if [ -e "$1/sessions" ]; then
         [ -d "$1/sessions" ] && [ -r "$1/sessions" ] && [ -x "$1/sessions" ] || return 1
     fi
     for f in "$1"/sessions/*.json; do
         if [ ! -e "$f" ] && [ ! -L "$f" ]; then continue; fi
         [ -f "$f" ] || return 1
-        jq -sr 'if length != 1 then error("expected one session record")
+        jq -sr --arg filter "${2:-all}" 'if length != 1 then error("expected one session record")
             else .[0] | if type != "object" or (.state | type) != "string"
                 then error("invalid session record")
-                elif .state == "running" then .n else empty end end' "$f" || return 1
+                elif .state == "running" and ($filter != "writers" or .read_only != true)
+                then .n else empty end end' "$f" || return 1
     done
     return 0
 }

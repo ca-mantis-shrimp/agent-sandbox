@@ -39,9 +39,20 @@ echo active >"$TEST_STATE"
 not_held "$repo"
 git -C "$repo" commit -q --allow-empty -m no-sessions
 [ ! -e "$TEST_LOG" ]
-# Readers hold too; multiple matching workspaces are printed once each.
+# Readers alone do not hold or query units, even with an unavailable manager.
 echo '{"n":1,"state":"running","read_only":true}' >"$AGENT_RUNS/a/sessions/1.json"
 echo '{"n":2,"state":"finished"}' >"$AGENT_RUNS/a/sessions/2.json"
+echo '' >"$TEST_STATE"
+not_held "$repo"
+git -C "$repo" commit -q --allow-empty -m reader-only
+[ ! -e "$TEST_LOG" ]
+# Still validate records alongside readers; corruption must fail closed.
+echo '{' >"$AGENT_RUNS/a/sessions/2.json"
+fails git -C "$repo" commit -q --allow-empty -m corrupt-reader 2>"$tmp/error"
+grep -q 'cannot check repository holds' "$tmp/error"
+# A writer alongside a reader holds; legacy records count as writers too.
+echo active >"$TEST_STATE"
+echo '{"n":2,"state":"running","read_only":false}' >"$AGENT_RUNS/a/sessions/2.json"
 echo '{"n":1,"state":"running"}' >"$AGENT_RUNS/b/sessions/1.json"
 [ "$(agent-status --held "$tmp/alias")" = "$(printf 'a\tactive\nb\tactive')" ]
 fails git -C "$repo" commit -q --allow-empty -m refused 2>"$tmp/error"
@@ -69,6 +80,7 @@ printf '%s\n' '#!/bin/sh' 'cat "$TEST_STATE"' >"$tmp/bin/systemctl"
 # Finished records do not hold even if a unit reports active.
 echo active >"$TEST_STATE"
 for ws in a b; do echo '{"n":1,"state":"finished"}' >"$AGENT_RUNS/$ws/sessions/1.json"; done
+echo '{"n":2,"state":"finished"}' >"$AGENT_RUNS/a/sessions/2.json"
 not_held "$repo"
 git -C "$repo" commit -q --allow-empty -m finished
 fails agent-status --held >"$tmp/out" 2>"$tmp/error"
@@ -93,12 +105,16 @@ for corrupt in '{' '' 'null'; do
     grep -q 'cannot check repository holds' "$tmp/error"
 done
 echo '{"n":1,"state":"finished"}' >"$AGENT_RUNS/a/sessions/1.json"
-# An unexpected exit 1 (including a set -e abort) is never not-held.
-printf '%s\n' '#!/bin/sh' 'set -e' 'false' >"$tmp/bin/agent-status"
+# A PATH impostor cannot bypass the installed checkout's hold check.
+printf '%s\n' '#!/bin/sh' 'exit 3' >"$tmp/bin/agent-status"
 chmod +x "$tmp/bin/agent-status"
-fails git -C "$repo" commit -q --allow-empty -m aborted 2>"$tmp/error"
-grep -q 'cannot check repository holds' "$tmp/error"
+echo '{"n":1,"state":"running","read_only":false}' >"$AGENT_RUNS/a/sessions/1.json"
+fails git -C "$repo" commit -q --allow-empty -m path-impostor 2>"$tmp/error"
+grep -q 'repository held' "$tmp/error"
 rm "$tmp/bin/agent-status"
+echo '{"n":1,"state":"finished"}' >"$AGENT_RUNS/a/sessions/1.json"
+# Host Git needs no sandbox commands on PATH.
+PATH="${PATH#"$tmp/bin:$tool/bin:"}" git -C "$repo" commit -q --allow-empty -m no-tool-path
 # A check error is not the no-hold exit code and the hook refuses it.
 echo '{}' >"$AGENT_RUNS/a/manifest.json"
 code=0
@@ -120,6 +136,18 @@ printf '%s\n' 'exit 0' >"$installed/lib/agent-pre-commit.sh"
 git -C "$repo" commit -q --allow-empty -m live-update
 "$installed/bin/agent-doctor" --install-hooks "$repo"
 git -C "$repo" commit -q --allow-empty -m repeat-upgrade
+# Real implementation resolves its sibling bin, including quoted checkout paths.
+cp "$tool/lib/agent-pre-commit.sh" "$installed/lib/agent-pre-commit.sh"
+printf '%s\n' '#!/bin/sh' 'exit 3' >"$installed/bin/agent-status"
+chmod +x "$installed/bin/agent-status"
+git -C "$repo" commit -q --allow-empty -m sibling-status
+# Unexpected exit 1 and a missing sibling both fail closed; no PATH fallback.
+printf '%s\n' '#!/bin/sh' 'set -e' 'false' >"$installed/bin/agent-status"
+fails git -C "$repo" commit -q --allow-empty -m aborted 2>"$tmp/error"
+grep -q 'cannot check repository holds' "$tmp/error"
+rm "$installed/bin/agent-status"
+fails git -C "$repo" commit -q --allow-empty -m missing-status 2>"$tmp/error"
+grep -q 'cannot check repository holds' "$tmp/error"
 rm "$installed/lib/agent-pre-commit.sh"
 fails git -C "$repo" commit -q --allow-empty -m missing-checkout 2>"$tmp/error"
 # Even a symlink to a marked hook is not ours to replace.

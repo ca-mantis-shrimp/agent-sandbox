@@ -102,7 +102,8 @@ ActiveState, tab-separated, one per line. It exits **0 when held**, **3 when not
 held**, or **2 for invalid input/record errors**. Other failures are also errors,
 never a not-held answer.
 Paths inside the repository and symlink aliases resolve to the same checkout.
-Both writers and read-only sessions hold the repository. Running records are
+Only writer sessions hold the repository; read-only reviews do not conflict
+with host commits. Records without `read_only` count as writers. Running records are
 checked against the unit: stopped units release stale holds; unavailable manager
 state conservatively retains them, shown as `unavailable`. A failed unit query
 also retains the hold, even if it printed a stopped state. Corrupt or unreadable
@@ -122,8 +123,9 @@ Reinstalling upgrades old byte-copied guards identified by their
 `# Installed explicitly by agent-doctor --install-hooks. Host PATH declares tools.`
 marker line; unmarked hooks and symlinks are never replaced. If the installed
 checkout moves or disappears, commits fail closed until the guard is reinstalled.
-It never installs silently or into workspace snapshots. The host's Git
-process must have the sandbox's `bin/` on `PATH`. The hook names every holding
+It never installs silently or into workspace snapshots. The guard resolves
+`bin/agent-status` beside its own checkout, not from the host's `PATH`; a missing
+command fails closed. The hook names every holding
 workspace and refuses the commit; check failures also refuse rather than silently
 allowing a commit. Only the human's explicit `git commit --no-verify` bypasses it;
 there is no sandbox bypass setting.
