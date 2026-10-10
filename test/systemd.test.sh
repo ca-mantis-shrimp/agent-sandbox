@@ -10,6 +10,16 @@ export AGENT_RUNS="$tmp/runs" AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/images" 
 export XDG_RUNTIME_DIR="$tmp/runtime"
 mkdir -p "$AGENT_RUNS/ws/work" "$AGENT_BASE" "$AGENT_LAYERS" "$tmp/bin" "$HOME"
 run="$AGENT_RUNS/ws"
+# Host identities are fixtures, never the session's passwd/group databases.
+printf '%s\n' '#!/bin/sh' \
+    '[ "${GETENT_FAIL:-}" != "$1" ] || exit 2' \
+    'case "$*" in' \
+    '  "passwd agent") printf '\''agent:x:%s:812:Agent "worker":/home/agent:/usr/bin/nologin\n'\'' "${TEST_AGENT_UID:-731}" ;;' \
+    '  "group agents") echo "agents:x:${TEST_AGENTS_GID:-812}:" ;;' \
+    '  *) exit 2 ;;' \
+    'esac' >"$tmp/bin/getent"
+chmod +x "$tmp/bin/getent"
+export PATH="$tmp/bin:$PATH"
 [ "$(agent_unit ws)" = agent@ws.service ]
 [ "$(agent_unit 20260930-010203)" = agent@20260930-010203.service ]
 if agent_unit '../bad' >/dev/null 2>&1; then exit 1; fi
@@ -32,6 +42,34 @@ write_agent_run "$run" /repo/example claude model 1 false 2>"$tmp/error"
 touch "$AGENT_LAYERS/example.raw" "$AGENT_LAYERS/example-etc.raw"
 write_agent_run "$run" /repo/example claude model 1 false 2>"$tmp/error"
 [ ! -s "$tmp/error" ]
+# Records preserve host fields and escape text through jq; aliases follow them.
+jq -e '. == {userName:"agent", uid:731, gid:812, realName:"Agent \"worker\"",
+    homeDirectory:"/home/agent", shell:"/usr/bin/nologin", disposition:"system"}' "$run/userdb/agent.user" >/dev/null
+jq -e '. == {groupName:"agents", gid:812}' "$run/userdb/agents.group" >/dev/null
+[ "$(readlink "$run/userdb/731.user")" = agent.user ]
+[ "$(readlink "$run/userdb/812.group")" = agents.group ]
+for record in "$run/userdb"/*; do
+    [ "$(stat -Lc %a "$record")" = 644 ]
+done
+grep -qxF 'User=agent' "$tool/system/usr/lib/systemd/system/agent@.service"
+grep -qxF 'Group=agents' "$tool/system/usr/lib/systemd/system/agent@.service"
+grep -qxF 'BindReadOnlyPaths=-/var/lib/agent-runs/%i/userdb:/run/host/userdb' "$tool/system/usr/lib/systemd/system/agent@.service"
+# Every run replaces records, their permissions and aliases, with current IDs.
+echo stale >"$run/userdb/agent.user"
+chmod 0600 "$run/userdb/agents.group"
+TEST_AGENT_UID=732 TEST_AGENTS_GID=813 write_agent_run "$run" /repo/example pi model 2 false
+jq -e '.uid == 732' "$run/userdb/agent.user" >/dev/null
+jq -e '.gid == 813' "$run/userdb/agents.group" >/dev/null
+[ ! -L "$run/userdb/731.user" ] && [ ! -L "$run/userdb/812.group" ]
+[ "$(readlink "$run/userdb/732.user")" = agent.user ]
+[ "$(readlink "$run/userdb/813.group")" = agents.group ]
+for record in "$run/userdb"/*; do
+    [ "$(stat -Lc %a "$record")" = 644 ]
+done
+for database in passwd group; do
+    GETENT_FAIL=$database fails write_agent_run "$run" /repo/example pi model 2 false 2>"$tmp/error"
+    grep -q "getent $database .* failed" "$tmp/error"
+done
 AGENT_SESSION_USD=5 write_agent_run "$run" /repo/example claude 'a "model"' 1 true
 [ "$(readlink "$run/root")" = "$AGENT_BASE" ]
 [ "$(readlink "$run/cache")" = "$AGENT_RUNS/.cache/example" ]

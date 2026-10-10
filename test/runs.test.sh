@@ -113,6 +113,15 @@ if (cd "$repo" && workspace_repo "$ws") >"$tmp/repo-out" 2>/dev/null; then exit 
 
 # --- new workspaces snapshot pi config, never login or mount declarations ---
 export AGENT_RUNS="$tmp/new-runs" HOME="$tmp/home"
+mkdir -p "$tmp/bin"
+printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  "passwd agent") echo "agent:x:731:812:Agent:/home/agent:/usr/bin/nologin" ;;' \
+    '  "group agents") echo "agents:x:812:" ;;' \
+    '  *) exit 2 ;;' \
+    'esac' >"$tmp/bin/getent"
+chmod +x "$tmp/bin/getent"
+export PATH="$tmp/bin:$PATH"
 mkdir -p "$HOME/.pi/agent/agents" "$repo/.sandbox"
 printf '%s\n' '{"packages":["npm:remote-pi","npm:keep"],"theme":"test"}' >"$HOME/.pi/agent/settings.json"
 echo custom >"$HOME/.pi/agent/agents/custom.md"
