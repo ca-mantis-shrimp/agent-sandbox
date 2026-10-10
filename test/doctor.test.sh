@@ -20,7 +20,7 @@ touch "$AGENT_LAYERS/harness.raw"
 PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out"
 grep -q 'calling process is in agents group' "$tmp/out"
 grep -q 'ok       agent@.service installed' "$tmp/out"
-grep -q 'cannot be checked from this user' "$tmp/out"
+grep -Fq 'note     Claude sessions need /etc/credstore/agent.claude_token (plain) or /etc/credstore.encrypted/agent.claude_token (sealed with systemd-creds encrypt, e.g. to the TPM); neither root-only credstore can be checked from this user' "$tmp/out"
 ! grep -q 'agent.claude_token.*missing' "$tmp/out"
 grep -q 'ok       shared pi login for provider openai' "$tmp/out"
 # A different provider is selected by the same environment override as launches.
