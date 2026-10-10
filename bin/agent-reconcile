@@ -51,8 +51,7 @@ for n in ${only:-$(running_sessions "$run")}; do
         stopped*) state=stopped ;;
         *) state=failed ;;
     esac
-    commits='{}'
-    [ -d "$run/work" ] && commits=$(repo_commits "$run/work" "refs/agent/session-$n")
+    commits=$(repo_commits "$run" "refs/agent/session-$n")
 
     # Keep the unit and its properties until the record is durable. A later
     # invocation can retry if writing it fails.

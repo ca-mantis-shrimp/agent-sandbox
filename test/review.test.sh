@@ -66,10 +66,13 @@ git -C "$work" branch agent/ws
 git -C "$work" update-ref refs/agent/base HEAD
 jq -n --arg repo "$tmp/repo" '{state: "ready", repo: $repo}' >"$tmp/runs/ws/manifest.json"
 cp "$tmp/reviews/one.json" "$tmp/runs/ws/reviews/one.json"
+mkdir -p "$tmp/runs/ws/sessions" "$tmp/runs/ws/exports"
+echo '{"n":1,"state":"finished"}' >"$tmp/runs/ws/sessions/1.json"
+echo '{".":{"base":[],"session":[],"dirty":false}}' >"$tmp/runs/ws/exports/1.json"
 AGENT_RUNS="$tmp/runs" sh "$tmp/tool/bin/agent-harvest" ws >"$tmp/harvest"
 grep -qF 'external review one by claude-opus-5-5' "$tmp/harvest"
 grep -qF 'blocking a:1: bug' "$tmp/harvest"
-grep -qF 'agent-harvest > repo: no commits' "$tmp/harvest"
+grep -qF 'agent-harvest > .: no commits' "$tmp/harvest"
 # An external-only review also triggers the human verdict reminder.
 human_verdict_reminder ws "$(workspace_json "$tmp/runs/ws")" 2>"$tmp/reminder"
 grep -qF 'agent-verdict ws' "$tmp/reminder"

@@ -41,6 +41,7 @@ Workspaces are run directories at `$AGENT_RUNS/<workspace>/` (default **`/var/li
 | `agents/` | harness snapshot, mounted read-only |
 | `manifest.json` | workspace facts, including the repository it cloned |
 | `sessions/`, `prompts/`, `transcripts/` | per-session records, prompts and transcripts |
+| `exports/` | writer-session JSON (commit shas and dirty flags) and per-repo Git bundles |
 | `run.env` | harness, model, session number, optional spend cap |
 | `root` | link to `AGENT_BASE` |
 | `layers/` | links to the required images and existing optional confext pairs |
@@ -79,6 +80,8 @@ Run these from the host, not inside an agent session.
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
 
+Host commands never run Git in agent-writable clones. Writers export plain data inside the sandbox; harvest fetches bundles into real repositories. Missing or invalid commit exports are reported as JSON `null` (unknown), and harvest/land refuse them. Read-only and gate sessions do not export. Harvest and land require the latest writer's valid export, never an older writer's: SIGKILL or OOM can prevent the EXIT trap from exporting. If they report `session <n> left no export (killed?)`, run a short writer to export the retained commits, for example `agent-run --in <ws> --prompt "Commit nothing; end."`, then harvest again. Bundles are named `root.bundle` for the root and `sm-<URI-encoded-path>.bundle` for submodules.
+
 `AGENT_SESSION_USD` defaults to $3 per session. The static unit defaults to a six-hour deadline, 60-second stop grace, and per-session limits of 8 CPUs and 16G memory with no swap. CPU and memory limits are the unit's defaults; `AGENT_CPUS` and `AGENT_MEMORY` are gone. Limits belong to the host: use unit overrides for defaults, or override one run with `systemctl set-property agent@<workspace>.service CPUQuota=400% MemoryMax=8G`, not runner-generated units. Follow a session with `journalctl -u agent@<workspace>.service -f`. Starts and stops use the system manager with `--no-ask-password`, never the user manager.
 
 ## Review, fix and land
@@ -100,7 +103,7 @@ Run these from the host, not inside an agent session.
 
 The landing gate runs the branch's `.sandbox/setup` and gate in the same unit template as sessions, so it can read the Claude credential and pi's shared login. For our own work, the branch was written by agent sessions that already held both, so this adds no credential exposure. If gates ever run code from elsewhere, give them their own unit without the credential and the login.
 
-A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate clone, retaining records, transcripts and the candidate's home/cache.
+A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. Once gated, the host never runs Git in that candidate again: reruns gate the retained tree and advance to tips saved before its first gate. To incorporate candidate edits or newly harvested work after gating, remove the candidate and rerun. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate clone, retaining records, transcripts and the candidate's home/cache.
 
 ## Unattended runs
 

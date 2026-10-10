@@ -55,6 +55,7 @@ on_exit() {
 trap on_exit EXIT
 
 say "cloning $(basename "$repo") into $run/work"
+# All Git here runs on a fresh clone, before any agent can write it.
 clone_local "$repo" "$run/work"
 cd "$run/work"
 # refs/agent/base marks where each repo started, so harvest counts exactly the

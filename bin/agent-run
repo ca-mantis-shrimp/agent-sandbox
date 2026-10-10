@@ -51,11 +51,6 @@ hold_layers "$repo" || { say "could not lock the layers"; exit 1; }
 layers=$(layers_json "$repo")
 write_agent_run "$run" "$repo" "$harness" "$model" "$n" "$readonly"
 printf '%s\n' "$prompt_text" >"$run/prompts/$n.md"
-(
-    cd "$run/work"
-    git update-ref "refs/agent/session-$n" HEAD
-    git submodule -q foreach --recursive "git update-ref refs/agent/session-$n HEAD"
-)
 jq -n --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model "$model" \
     --argjson ro "$readonly" --argjson layers "$layers" --arg started "$(date -Iseconds)" \
     '{n: $n, label: $label, harness: $harness, model: $model, read_only: $ro, layers: $layers,

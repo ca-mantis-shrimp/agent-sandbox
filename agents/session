@@ -30,6 +30,16 @@ set -eu
 n=${1:?usage: session <n>}
 job=${AGENT_JOB:?}
 harness=${AGENT_HARNESS:?}
+entry=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/session
+. "${entry%/*}/export"
+# Direct export is also useful for tests; it still runs inside the sandbox.
+if [ "${2:-}" = --export ]; then
+    [ "$harness" != gate ] || exit 0
+    [ "$(jq -r '.read_only // false' "$job/sessions/$n.json")" != true ] || exit 0
+    cd "$job/work"
+    export_session
+    exit
+fi
 # Gate sessions do not need a model, prompt or session record. The trap also
 # records setup failures; a killed unit has no success status to mistake for a pass.
 if [ "$harness" = gate ]; then
@@ -53,6 +63,19 @@ session_usd=${AGENT_SESSION_USD:-3}
 log="$job/transcripts/$n.jsonl"
 
 cd "$job/work"
+readonly=$(jq -r '.read_only // false' "$record")
+if [ "$readonly" != true ]; then
+    # A separate shell preserves errexit inside the exporter. Never let export
+    # failure replace the session outcome or prevent its record being written.
+    finish_export() {
+        sh "$entry" "$n" --export ||
+            echo 'session > export failed' >&2
+    }
+    trap 'finish_export' EXIT
+    trap 'exit 143' TERM
+    git update-ref "refs/agent/session-$n" HEAD
+    git submodule -q foreach --recursive "git update-ref refs/agent/session-$n HEAD"
+fi
 setup_started=$(date +%s)
 if [ -f .sandbox/setup ]; then
     echo "session > .sandbox/setup"

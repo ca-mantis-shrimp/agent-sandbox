@@ -41,6 +41,8 @@ chmod +x "$tmp/bin/systemctl"
 real_git=$(command -v git)
 printf '%s\n' '#!/bin/sh' \
     'case "$*" in' \
+    '  *"update-ref refs/agent/candidate/interrupted/base"*)' \
+    '    if [ "${INTERRUPT_RECORDING:-false}" = true ]; then exit 1; fi ;;' \
     '  *"branch -q -d"*)' \
     '    gl="$XDG_RUNTIME_DIR/agent-sandbox/land-green.lock"' \
     '    if [ -f "$gl" ]; then' \
@@ -92,6 +94,8 @@ git -C "$root/sub" switch -q main
 
 # A harvested workspace: branch agent/<id> in the root repo and the submodule.
 workspace() { # <id>
+    mkdir -p "$AGENT_RUNS/$1"
+    printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/$1/manifest.json"
     git -C "$root/sub" switch -q -c "agent/$1"
     commit "$root/sub" state "$1"
     git -C "$root/sub" switch -q main
@@ -99,8 +103,7 @@ workspace() { # <id>
     commit "$root" note "$1"
     git -C "$root" switch -q main
 }
-# Run from inside the fixture: a workspace without a manifest naming its repo
-# lands into the caller's checkout.
+# Run from inside the fixture; the manifest, not cwd, selects the repository.
 land() { # <id> [gate]: agent-land's exit status
     (cd "$root" && AGENT_LAND_GATE=${2:-.sandbox/gate} "$tool/bin/agent-land" "$1") >"$tmp/land.stdout" 2>"$tmp/land.log"
 }
@@ -144,6 +147,40 @@ grep -q 'removing incomplete candidate' "$tmp/land.log"
 [ "$(cat "$root/sub/state")" = incomplete ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
 [ ! -e "$partial" ]
+
+# --- interrupted checkpoint recording is completed on a rerun ---------------
+
+workspace interrupted
+before_root=$(head_of "$root") before_sub=$(head_of "$root/sub")
+fails env INTERRUPT_RECORDING=true "$tool/bin/agent-land" interrupted
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$before_sub" ]
+# Interruption left only a submodule tip; the root was not recorded first.
+git -C "$root/sub" rev-parse -q --verify refs/agent/candidate/interrupted/tip >/dev/null
+fails git -C "$root/sub" rev-parse -q --verify refs/agent/candidate/interrupted/base >/dev/null
+fails git -C "$root" rev-parse -q --verify refs/agent/candidate/interrupted/tip >/dev/null
+# Also exercise the old root-first partial state: root has both, sub lacks base.
+partial="$AGENT_RUNS/land-interrupted/work"
+git -C "$root" fetch -q "$partial" +HEAD:refs/agent/candidate/interrupted/tip
+git -C "$root" update-ref refs/agent/candidate/interrupted/base "$before_root"
+land interrupted
+[ "$(cat "$root/note")" = interrupted ]
+[ "$(cat "$root/sub/state")" = interrupted ]
+[ -z "$(git -C "$root" for-each-ref refs/agent/candidate/interrupted)" ]
+[ -z "$(git -C "$root/sub" for-each-ref refs/agent/candidate/interrupted)" ]
+
+# --- conflicting human edits stop landing without discarding them ------------
+
+workspace dirty
+before_root=$(head_of "$root") before_sub=$(head_of "$root/sub")
+printf 'human edit\n' >"$root/sub/state"
+fails land dirty
+[ "$(cat "$root/sub/state")" = 'human edit' ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$before_sub" ]
+git -C "$root/sub" restore state
+land dirty
+[ "$(cat "$root/sub/state")" = dirty ]
 
 # --- a red gate moves no real branch ------------------------------------------
 
@@ -212,14 +249,26 @@ work="$AGENT_RUNS/root-only/work"
 (. "$tool/lib/agent-runs.sh" && clone_local "$root" "$work")
 git -C "$work" switch -q -c agent/root-only
 git -C "$work/sub" switch -q -c agent/root-only
+for p in . sub; do
+    git -C "$work/$p" update-ref refs/agent/base HEAD
+    git -C "$work/$p" update-ref refs/agent/session-1 HEAD
+done
+mkdir -p "$AGENT_RUNS/root-only/sessions"
+printf '{"id":"root-only", "repo":"%s"}\n' "$root" >"$AGENT_RUNS/root-only/manifest.json"
+echo '{"n":1,"read_only":false}' >"$AGENT_RUNS/root-only/sessions/1.json"
+export_root_only() {
+    AGENT_JOB="$AGENT_RUNS/root-only" AGENT_HARNESS=claude sh "$tool/agents/session" 1 --export
+}
 commit "$work" note root-only
 git -C "$root" fetch -q "$work" agent/root-only:agent/root-only
 commit "$work/sub" state unharvested
+export_root_only
 before_root=$(head_of "$root")
 fails land root-only
 grep -q "not harvested" "$tmp/land.log"
 [ "$(head_of "$root")" = "$before_root" ]
 git -C "$work/sub" reset -q --hard HEAD~1
+export_root_only
 land root-only
 [ "$(cat "$root/note")" = root-only ]
 [ ! -d "$work" ]
@@ -265,10 +314,17 @@ git -C "$plain" switch -q -c agent/plain
 commit "$plain" note plain
 git -C "$plain" switch -q main
 : >"$LAYER_LOG"
+# Non-conflicting tracked human edits survive a successful fast-forward.
+printf '# human edit\n' >>"$plain/.sandbox/setup"
+cp "$plain/.sandbox/setup" "$tmp/human-setup"
+mkdir -p "$AGENT_RUNS/plain"
+printf '{"repo":"%s"}\n' "$plain" >"$AGENT_RUNS/plain/manifest.json"
 (cd "$plain" && "$tool/bin/agent-land" plain) >"$tmp/land.log" 2>&1
 [ "$(sed -n 1p "$LAYER_LOG")" = "harness harness $tool/layers/harness " ]
 sed -n 2p "$LAYER_LOG" | grep -q '^project plain /.*/\.sandbox/layer plainrecipe$'
 [ "$(cat "$plain/note")" = plain ]
+cmp "$plain/.sandbox/setup" "$tmp/human-setup"
+git -C "$plain" restore .sandbox/setup
 [ -z "$(git -C "$plain" status --porcelain)" ]
 fails git -C "$plain" rev-parse -q --verify refs/heads/agent/plain >/dev/null
 

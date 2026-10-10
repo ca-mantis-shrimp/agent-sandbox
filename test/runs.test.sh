@@ -62,11 +62,54 @@ repo="$tmp/repo"
 git init -q "$repo"
 git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m base
 git -C "$repo" update-ref refs/agent/base HEAD
-[ "$(repo_commits "$repo" refs/agent/base)" = '{}' ]
+run="$tmp/export-run"
+mkdir -p "$run/sessions"
+printf '{"id":"test","repo":"%s"}\n' "$repo" >"$run/manifest.json"
+echo '{"n":1,"read_only":false}' >"$run/sessions/1.json"
+ln -s "$repo" "$run/work"
+git -C "$repo" switch -q -c agent/test
+git -C "$repo" update-ref refs/agent/session-1 HEAD
+AGENT_JOB="$run" AGENT_HARNESS=claude sh "$tool/agents/session" 1 --export
+[ "$(repo_commits "$run" refs/agent/base)" = '{}' ]
 git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
 git -C "$repo" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
-[ "$(repo_commits "$repo" refs/agent/base | jq -c '.["."] | length')" = 2 ]
-[ "$(repo_commits "$repo" refs/agent/missing)" = '{}' ]
+AGENT_JOB="$run" AGENT_HARNESS=claude sh "$tool/agents/session" 1 --export
+[ "$(repo_commits "$run" refs/agent/base | jq -c '.["."] | length')" = 2 ]
+[ "$(repo_commits "$run" refs/agent/missing)" = null ]
+echo '{"evil":{"base":["not-a-sha"]}}' >"$run/exports/1.json"
+[ "$(repo_commits "$run" refs/agent/base)" = null ]
+echo '{".":{"base":["not-a-sha"],"session":[],"dirty":false}}' >"$run/exports/1.json"
+[ "$(repo_commits "$run" refs/agent/base)" = null ]
+printf '%s\n' '{".":{"base":[],"session":[],"dirty":false}}' '{}' >"$run/exports/1.json"
+[ "$(repo_commits "$run" refs/agent/base)" = null ]
+rm "$run/exports/1.json"
+[ "$(repo_commits "$run" refs/agent/base)" = null ]
+# Paths are built only for positive integral writer numbers.
+for n in '"../../outside"' '"1"' 0 -1 1.5 null; do
+    printf '{"n":%s,"read_only":false}\n' "$n" >"$run/sessions/2.json"
+    if latest_writer "$run" >"$tmp/n" 2>/dev/null; then exit 1; fi
+done
+rm "$run/sessions/2.json"
+for n in '' '../outside' 0 -1 1.5; do
+    [ "$(session_export "$run" "$n")" = null ]
+done
+# Even valid JSON must be a regular file, never a symlink or FIFO.
+echo '{".":{"base":[],"session":[],"dirty":false}}' >"$tmp/export.json"
+ln -s "$tmp/export.json" "$run/exports/1.json"
+[ "$(session_export "$run" 1)" = null ]
+rm "$run/exports/1.json"
+mkfifo "$run/exports/1.json"
+[ "$(session_export "$run" 1)" = null ]
+rm "$run/exports/1.json"
+# A newer killed writer wins over the older valid export; readers do not.
+cp "$tmp/export.json" "$run/exports/1.json"
+echo '{"n":2,"read_only":false}' >"$run/sessions/2.json"
+echo '{"n":3,"read_only":true}' >"$run/sessions/3.json"
+[ "$(latest_writer "$run")" = 2 ]
+[ "$(repo_commits "$run" refs/agent/base)" = null ]
+# A workspace missing .repo cannot redirect commands to cwd's repository.
+if (cd "$repo" && workspace_repo "$ws") >"$tmp/repo-out" 2>/dev/null; then exit 1; fi
+[ ! -s "$tmp/repo-out" ]
 
 # --- new workspaces snapshot pi config, never login or mount declarations ---
 export AGENT_RUNS="$tmp/new-runs" HOME="$tmp/home"
