@@ -88,7 +88,13 @@ grep -qxF 'AGENT_SESSION_USD="5"' "$run/run.env"
 [ "$(stat -c %a "$run/home")" = 775 ]
 touch "$run/home/keep"
 rm "$AGENT_LAYERS/example-etc.raw"
+AGENT_PI_PROVIDER=custom-provider write_agent_run "$run" /repo/example pi model 2 false
+grep -qxF 'AGENT_PI_PROVIDER="custom-provider"' "$run/run.env"
+unset AGENT_PI_PROVIDER
 write_agent_run "$run" /repo/example pi model 2 false
+grep -qxF 'AGENT_PI_PROVIDER="openai"' "$run/run.env"
+fails env AGENT_PI_PROVIDER="bad
+provider" sh -c '. "$1/lib/agent-runs.sh"; . "$1/lib/agent-systemd.sh"; write_agent_run "$2" /repo/example pi model 2 false' sh "$tool" "$run"
 [ -f "$run/home/keep" ]
 [ "$(readlink "$run/pi/auth.json")" = /srv/pi-login/auth.json ]
 [ ! -L "$run/review/work" ]
@@ -169,13 +175,16 @@ sed -n 2p "$LAYER_LOG" | grep -q '^project example /.*/\.sandbox/layer committed
 jq -e '.layers == {harness: {name: "harness"}, project: {name: "example"}}' "$run/sessions/1.json" >/dev/null
 [ ! -e "$tmp/models-executed" ] && [ ! -e "$tmp/env-executed" ]
 . "$tool/agents/models.env"
+[ "$AGENT_PI_PROVIDER" = openai ]
 jq -e --arg model "$AGENT_CLAUDE_MODEL" '.model == $model' "$run/sessions/1.json" >/dev/null
 fails "$tool/bin/agent-run" --in ws --prompt review --read-only
 [ "$(find "$run/sessions" -name '*.json' | wc -l)" -eq 1 ]
 "$tool/bin/agent-stop" ws/1
 "$tool/bin/agent-result" ws/1 >"$tmp/result" && exit 1
 jq -e '.state == "stopped"' "$tmp/result" >/dev/null
-[ "$("$tool/bin/agent-run" --in ws --prompt work)" = ws/2 ]
+[ "$(AGENT_PI_PROVIDER=launch-provider AGENT_PI_MODEL=launch-model "$tool/bin/agent-run" --in ws --harness pi --prompt work)" = ws/2 ]
+grep -qxF 'AGENT_PI_PROVIDER="launch-provider"' "$run/run.env"
+grep -qxF 'AGENT_MODEL="launch-model"' "$run/run.env"
 [ ! -L "$run/review/work" ]
 # An old session's result or stop must never wait for / stop the newer session.
 "$tool/bin/agent-result" ws/1 --wait >"$tmp/result" && exit 1

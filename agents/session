@@ -94,7 +94,7 @@ blocked_tools="ScheduleWakeup CronCreate Monitor RemoteTrigger"
 pi_session() {
     # Pi has no built-in spend cap. Watch its usage events and terminate the
     # session at the threshold. A single in-flight request may overshoot it.
-    pi -p --mode json --provider openai \
+    pi -p --mode json --provider "${AGENT_PI_PROVIDER:?}" \
         --model "$model" \
         --exclude-tools bg_run,bg_delegate,subagent,ScheduleWakeup \
         "$(cat "$prompt")" >"$log" 2>"$log.stderr" &
