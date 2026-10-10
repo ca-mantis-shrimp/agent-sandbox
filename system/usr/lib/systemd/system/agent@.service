@@ -56,16 +56,16 @@ ImportCredential=agent.*
 WorkingDirectory=/srv/job/%i/work
 ExecStart=/srv/agents/session ${AGENT_SESSION}
 
-# Isolation: the tree is read-only, the host's loopback and LAN are out of
-# reach except systemd-resolved's stub for DNS, and nothing escalates.
+# Isolation: the tree is read-only and nothing escalates. Host loopback
+# (including wildcard listeners and the DNS stub) is reachable; LAN,
+# link-local and multicast addresses remain out of reach.
 ProtectSystem=strict
 PrivateTmp=yes
 PrivatePIDs=yes
 PrivateIPC=yes
 NoNewPrivileges=yes
 CapabilityBoundingSet=
-IPAddressAllow=127.0.0.53
-IPAddressDeny=localhost link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 
 # Limits and lifecycle, as the Quadlet unit had them.

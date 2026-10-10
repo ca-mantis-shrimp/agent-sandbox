@@ -17,12 +17,38 @@ printf '%s\n' '#!/bin/sh' 'case "$1" in --version) echo "systemd ${TEST_VERSION:
 chmod +x "$tmp/path/id" "$tmp/path/systemctl"
 export AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/images"
 touch "$AGENT_LAYERS/harness.raw"
+# Socket checks read fixtures, never the host/session proc tables.
+export AGENT_PROC_NET="$tmp/net"
+mkdir "$AGENT_PROC_NET"
+printf '%s\n' '  sl  local_address rem_address st' \
+    '0: 0100007F:225F 00000000:0000 0A' \
+    '1: 3500007F:0035 00000000:0000 0A' \
+    '2: 0102037F:1F90 00000000:0000 0A' \
+    '3: 00000000:0050 00000000:0000 0A' \
+    '4: 0101A8C0:01BB 00000000:0000 0A' \
+    '5: 0100007F:DEAD 00000000:0000 01' \
+    '6: 0100007F:225F 00000000:0000 0A' >"$AGENT_PROC_NET/tcp"
+printf '%s\n' '  sl  local_address rem_address st' \
+    '0: 00000000000000000000000001000000:01BB 00000000000000000000000000000000:0000 0A' \
+    '1: 00000000000000000000000000000000:1F90 00000000000000000000000000000000:0000 0A' \
+    '2: 000080FE000000000000000001000000:BAD0 00000000000000000000000000000000:0000 0A' \
+    '3: 00000000000000000000000001000000:DEAD 00000000000000000000000000000000:0000 06' >"$AGENT_PROC_NET/tcp6"
 PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out"
 grep -q 'calling process is in agents group' "$tmp/out"
 grep -q 'ok       agent@.service installed' "$tmp/out"
 grep -Fq 'note     Claude sessions need /etc/credstore/agent.claude_token (plain) or /etc/credstore.encrypted/agent.claude_token (sealed with systemd-creds encrypt, e.g. to the TPM); neither root-only credstore can be checked from this user' "$tmp/out"
 ! grep -q 'agent.claude_token.*missing' "$tmp/out"
 grep -q 'ok       shared pi login for provider openai' "$tmp/out"
+grep -Fxq 'agent-doctor > note     TCP listeners reachable through loopback: 127.0.0.1:8799 127.0.0.53:53 127.3.2.1:8080 0.0.0.0:80 [::1]:443 [::]:8080' "$tmp/out"
+# No listeners, including header-only files, is a note rather than a failure.
+printf '%s\n' '  sl  local_address rem_address st' >"$AGENT_PROC_NET/tcp"
+printf '%s\n' '0: 0101A8C0:01BB 00000000:0000 0A' >"$AGENT_PROC_NET/tcp6"
+PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out"
+grep -Fxq 'agent-doctor > note     TCP listeners reachable through loopback: none' "$tmp/out"
+rm "$AGENT_PROC_NET/tcp6"
+PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out"
+grep -Fq 'TCP listeners reachable through loopback: unavailable' "$tmp/out"
+: >"$AGENT_PROC_NET/tcp6"
 # A different provider is selected by the same environment override as launches.
 AGENT_PI_PROVIDER=other PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out" && exit 1
 grep -q 'MISSING  shared pi login for provider other' "$tmp/out"

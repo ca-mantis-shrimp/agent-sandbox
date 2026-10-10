@@ -53,6 +53,11 @@ for record in "$run/userdb"/*; do
 done
 grep -qxF 'User=agent' "$tool/system/usr/lib/systemd/system/agent@.service"
 grep -qxF 'Group=agents' "$tool/system/usr/lib/systemd/system/agent@.service"
+# Shared host networking permits loopback without a resolver-only exception;
+# preserve the LAN, link-local and multicast block exactly.
+grep -qxF 'IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7' "$tool/system/usr/lib/systemd/system/agent@.service"
+! grep -q '^IPAddressAllow=' "$tool/system/usr/lib/systemd/system/agent@.service"
+! grep -q '^PrivateNetwork=yes' "$tool/system/usr/lib/systemd/system/agent@.service"
 grep -qxF 'BindReadOnlyPaths=-/var/lib/agent-runs/%i/userdb:/run/host/userdb' "$tool/system/usr/lib/systemd/system/agent@.service"
 # Every run replaces records, their permissions and aliases, with current IDs.
 echo stale >"$run/userdb/agent.user"
