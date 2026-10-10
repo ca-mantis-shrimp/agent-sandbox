@@ -9,6 +9,13 @@ export AGENT_RUNS="$tmp/runs" AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/layers" 
     GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@test
 mkdir -p "$AGENT_BASE" "$AGENT_LAYERS" "$tmp/bin"
 touch "$AGENT_LAYERS/harness.raw"
+printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  "passwd agent") echo "agent:x:731:812:Agent:/home/agent:/usr/bin/nologin" ;;' \
+    '  "group agents") echo "agents:x:812:" ;;' \
+    '  *) exit 2 ;;' \
+    'esac' >"$tmp/bin/getent"
+chmod +x "$tmp/bin/getent"
 real=$tool tool="$tmp/tool"
 mkdir "$tool"
 cp -R "$real/bin" "$real/lib" "$real/agents" "$tool/"

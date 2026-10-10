@@ -46,6 +46,24 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
     [ -f "$AGENT_LAYERS/$repo_name.raw" ] ||
         echo "agent-sandbox > no project layer for $repo_name; running on base + harness" >&2
     mkdir -p "$run/work" "$run/home" "$run/agents" "$run/pi" "$run/layers" "$(runs_dir)/.cache/$repo_name"
+    # Match User=agent and Group=agents in the installed unit, not the caller.
+    passwd=$(getent passwd agent) || {
+        echo 'agent-sandbox > cannot resolve unit user: getent passwd agent failed' >&2; exit 1;
+    }
+    group=$(getent group agents) || {
+        echo 'agent-sandbox > cannot resolve unit group: getent group agents failed' >&2; exit 1;
+    }
+    # Recreate records and numeric aliases each run, including after host ID changes.
+    rm -rf "$run/userdb"
+    mkdir -p "$run/userdb"
+    jq -n --arg record "$passwd" '$record | split(":") |
+        {userName: .[0], uid: (.[2] | tonumber), gid: (.[3] | tonumber),
+         realName: .[4], homeDirectory: .[5], shell: .[6], disposition: "system"}' >"$run/userdb/agent.user"
+    jq -n --arg record "$group" '$record | split(":") |
+        {groupName: .[0], gid: (.[2] | tonumber)}' >"$run/userdb/agents.group"
+    chmod 0644 "$run/userdb/agent.user" "$run/userdb/agents.group"
+    ln -s agent.user "$run/userdb/$(jq -r .uid "$run/userdb/agent.user").user"
+    ln -s agents.group "$run/userdb/$(jq -r .gid "$run/userdb/agents.group").group"
     ln -sfn /srv/pi-login/auth.json "$run/pi/auth.json"
     ln -sfn "$AGENT_BASE" "$run/root"
     ln -sfn "$(runs_dir)/.cache/$repo_name" "$run/cache"

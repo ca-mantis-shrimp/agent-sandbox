@@ -16,6 +16,14 @@ export AGENT_RUNS="$tmp/runs" GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@localho
 export AGENT_BASE="$tmp/base" AGENT_LAYERS="$tmp/images" XDG_RUNTIME_DIR="$tmp/runtime"
 mkdir -p "$AGENT_BASE" "$AGENT_LAYERS" "$tmp/bin"
 touch "$AGENT_LAYERS/harness.raw" "$AGENT_LAYERS/fixture.raw" "$AGENT_LAYERS/plain.raw"
+# Landing prepares the same unit identity records as a worker run.
+printf '%s\n' '#!/bin/sh' \
+    'case "$*" in' \
+    '  "passwd agent") echo "agent:x:731:812:Agent:/home/agent:/usr/bin/nologin" ;;' \
+    '  "group agents") echo "agents:x:812:" ;;' \
+    '  *) exit 2 ;;' \
+    'esac' >"$tmp/bin/getent"
+chmod +x "$tmp/bin/getent"
 printf '%s\n' '#!/bin/sh' \
     'case "$*" in' \
     '  *"-p ActiveState --value") echo inactive ;;' \

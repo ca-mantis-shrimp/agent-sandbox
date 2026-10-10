@@ -39,6 +39,8 @@ TemporaryFileSystem=/srv /home
 BindPaths=/var/lib/agent-runs/%i:/srv/job/%i
 BindReadOnlyPaths=-/var/lib/agent-runs/%i/review/work:/srv/job/%i/work
 BindReadOnlyPaths=/var/lib/agent-runs/%i/agents:/srv/agents
+# nss-systemd resolves the host's unit identity from static user/group records.
+BindReadOnlyPaths=-/var/lib/agent-runs/%i/userdb:/run/host/userdb
 BindReadOnlyPaths=/run/systemd/resolve/stub-resolv.conf:/etc/resolv.conf
 BindPaths=/var/lib/agent-runs/%i/home:/home/agent
 BindPaths=-/var/lib/agent-runs/%i/cache:/srv/cache
