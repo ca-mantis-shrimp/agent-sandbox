@@ -1,12 +1,43 @@
 #!/bin/sh
-# Read-only host checks. The root-only Claude credential is a note.
+# Read-only host checks, or explicit host-clone hook installation.
+# The root-only Claude credential is a note.
 set -u
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+if [ "$#" -gt 0 ]; then
+    [ "$#" -eq 2 ] && [ "$1" = --install-hooks ] || {
+        echo 'usage: agent-doctor [--install-hooks <repo>]' >&2; exit 2;
+    }
+    (
+        set -eu
+        cd -- "$2"
+        root=$(git rev-parse --show-toplevel)
+        cd -- "$root"
+        hooks=$(git rev-parse --git-path hooks)
+        hook="$hooks/pre-commit"
+        # Honor core.hooksPath, but never replace an existing human hook.
+        if [ -e "$hook" ] || [ -L "$hook" ]; then
+            if cmp -s "$tool/lib/agent-pre-commit.sh" "$hook"; then
+                chmod +x "$hook"
+                echo "agent-doctor > claim guard already installed: $hook"
+                exit 0
+            fi
+            echo "agent-doctor > refusing to replace existing hook: $hook" >&2
+            exit 1
+        fi
+        mkdir -p "$hooks"
+        # Noclobber also refuses a hook created after the check above.
+        (set -C; command cat "$tool/lib/agent-pre-commit.sh" >"$hook")
+        chmod +x "$hook"
+        echo "agent-doctor > installed claim guard: $hook"
+    )
+    exit $?
+fi
 failed=0
 ok() { printf 'agent-doctor > ok       %s\n' "$*"; }
 missing() { printf 'agent-doctor > MISSING  %s\n' "$*"; failed=1; }
 note() { printf 'agent-doctor > note     %s\n' "$*"; }
-for tool in git jq flock systemctl; do
-    if command -v "$tool" >/dev/null; then ok "$tool"; else missing "$tool"; fi
+for cmd in git jq flock systemctl; do
+    if command -v "$cmd" >/dev/null; then ok "$cmd"; else missing "$cmd"; fi
 done
 version=$(systemctl --version 2>/dev/null | awk 'NR == 1 {print $2}')
 case "$version" in
@@ -29,7 +60,6 @@ else missing "AGENT_LAYERS/harness.raw (${AGENT_LAYERS:-unset})"; fi
 if [ -r /etc/credstore/agent.claude_token ]; then ok '/etc/credstore/agent.claude_token readable'
 else note 'Claude sessions need /etc/credstore/agent.claude_token (plain) or /etc/credstore.encrypted/agent.claude_token (sealed with systemd-creds encrypt, e.g. to the TPM); neither root-only credstore can be checked from this user'; fi
 # Use the same installed defaults and launching-environment overrides as agent-run.
-tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/agents/models.env"
 login="${AGENT_RUNS:-/var/lib/agent-runs}/.pi/auth.json"
 # Inspect only: pi need not be installed on the host, and OAuth refresh would
