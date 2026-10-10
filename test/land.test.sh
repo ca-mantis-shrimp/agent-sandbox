@@ -309,6 +309,25 @@ grep -q 'warning: could not display the human verdict reminder' "$tmp/land.log"
 jq -e '.landed != null and .gate.ok == true
     and .gate.layers == {harness: {name: "harness"}, project: null}' "$AGENT_RUNS/advisory/manifest.json" >/dev/null
 
+# --- a submodule's Tests: lock stops before any candidate merges --------------
+
+workspace locked-sub
+git -C "$root/sub" switch -q agent/locked-sub
+commit "$root/sub" 'locked test' assertion
+git -C "$root/sub" commit -q --amend -m 'Tests: submodule assertion'
+locked=$(head_of "$root/sub")
+commit "$root/sub" 'locked test' weakened
+changed=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+before_root=$(head_of "$root") before_sub=$(head_of "$root/sub")
+: >"$GATE_LOG"
+fails land locked-sub
+grep -Fq "sub: Tests: lock violated: locked test; locked by $locked; changed by $changed" "$tmp/land.log"
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$before_sub" ]
+[ ! -e "$AGENT_RUNS/land-locked-sub/work" ]
+[ ! -s "$GATE_LOG" ]
+
 # --- a repo without submodules lands the same way -----------------------------
 
 plain="$tmp/plain"
@@ -335,5 +354,76 @@ cmp "$plain/.sandbox/setup" "$tmp/human-setup"
 git -C "$plain" restore .sandbox/setup
 [ -z "$(git -C "$plain" status --porcelain)" ]
 fails git -C "$plain" rev-parse -q --verify refs/heads/agent/plain >/dev/null
+
+# --- Tests: locks are historical, not a final-tree diff -----------------------
+
+root=$plain
+locked_workspace() { # <id>: harvested branch in a repo without submodules
+    mkdir -p "$AGENT_RUNS/$1"
+    printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/$1/manifest.json"
+    git -C "$root" switch -q -c "agent/$1"
+}
+
+locked_workspace lock-respected
+commit "$root" 'test assertions' original
+git -C "$root" commit -q --amend -m 'Tests: original assertions'
+# A second Tests: commit may change an already locked path.
+commit "$root" 'test assertions' stronger
+git -C "$root" commit -q --amend -m 'Tests: extend assertions'
+commit "$root" implementation working
+git -C "$root" switch -q main
+land lock-respected
+[ "$(cat "$root/test assertions")" = stronger ]
+[ "$(cat "$root/implementation")" = working ]
+
+locked_workspace lock-edited
+commit "$root" 'test assertions' locked
+commit "$root" 'another test' locked
+git -C "$root" reset -q --soft HEAD~2
+git -C "$root" commit -q -m 'Tests: lock both files'
+locked=$(head_of "$root")
+printf 'weakened\n' >"$root/test assertions"
+printf 'weakened\n' >"$root/another test"
+git -C "$root" add -A
+git -C "$root" commit -q -m 'Implementation: weaken tests'
+changed=$(head_of "$root")
+# Even restoring the assertions in a later Tests: commit cannot erase a breach.
+printf 'locked\n' >"$root/test assertions"
+printf 'locked\n' >"$root/another test"
+git -C "$root" add -A
+git -C "$root" commit -q -m 'Tests: restore assertions'
+git -C "$root" switch -q main
+before_root=$(head_of "$root")
+: >"$GATE_LOG"
+fails land lock-edited
+for file in 'test assertions' 'another test'; do
+    grep -Fq "$file; locked by $locked; changed by $changed (Implementation: weaken tests)" "$tmp/land.log"
+done
+[ "$(head_of "$root")" = "$before_root" ]
+[ ! -e "$AGENT_RUNS/land-lock-edited/work" ]
+[ ! -s "$GATE_LOG" ]
+
+# Renames/deletions touch the old path too; quoted names are not shell words.
+locked_workspace lock-renamed
+odd=$(printf 'test\nassertions')
+commit "$root" "$odd" locked
+git -C "$root" commit -q --amend -m 'Tests: unusual path'
+locked=$(head_of "$root")
+git -C "$root" mv "$odd" renamed-test
+git -C "$root" commit -q -m 'Move locked test'
+changed=$(head_of "$root")
+git -C "$root" switch -q main
+fails land lock-renamed
+grep -Fq "\"test\\nassertions\"; locked by $locked; changed by $changed" "$tmp/land.log"
+[ ! -e "$AGENT_RUNS/land-lock-renamed/work" ]
+
+# Tests: is an exact, case-sensitive subject prefix, not text in the body.
+locked_workspace lock-prefix
+commit "$root" ordinary assertion
+git -C "$root" commit -q --amend -m 'tests: lowercase' -m 'Tests: only in the body'
+commit "$root" ordinary changed
+git -C "$root" switch -q main
+land lock-prefix
+[ "$(cat "$root/ordinary")" = changed ]
 
 echo "agent-land.test > ok"
