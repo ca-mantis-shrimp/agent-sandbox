@@ -14,20 +14,33 @@ if [ "$#" -gt 0 ]; then
         cd -- "$root"
         hooks=$(git rev-parse --git-path hooks)
         hook="$hooks/pre-commit"
-        # Honor core.hooksPath, but never replace an existing human hook.
+        # Both the old byte-copy and the forwarding stub have this marker.
+        # Symlinks and unmarked human hooks are never replaced.
+        marker='# Installed explicitly by agent-doctor --install-hooks. Host PATH declares tools.'
+        owned=false
         if [ -e "$hook" ] || [ -L "$hook" ]; then
-            if cmp -s "$tool/lib/agent-pre-commit.sh" "$hook"; then
-                chmod +x "$hook"
-                echo "agent-doctor > claim guard already installed: $hook"
-                exit 0
+            if [ ! -L "$hook" ] && [ -f "$hook" ] && grep -qxF "$marker" "$hook"; then
+                owned=true
+            else
+                echo "agent-doctor > refusing to replace existing hook: $hook" >&2
+                exit 1
             fi
-            echo "agent-doctor > refusing to replace existing hook: $hook" >&2
-            exit 1
         fi
         mkdir -p "$hooks"
-        # Noclobber also refuses a hook created after the check above.
-        (set -C; command cat "$tool/lib/agent-pre-commit.sh" >"$hook")
-        chmod +x "$hook"
+        # Quote the resolved checkout path even when it contains single quotes.
+        target=$(printf '%s' "$tool/lib/agent-pre-commit.sh" | sed "s/'/'\\\\''/g")
+        stub=$(printf '#!/bin/sh\n%s\nexec sh '\''%s'\'' "$@"\n' "$marker" "$target")
+        if [ "$owned" = true ]; then
+            replacement=$(mktemp "$hooks/.agent-pre-commit.XXXXXX")
+            trap 'rm -f "$replacement"' EXIT
+            printf '%s\n' "$stub" >"$replacement"
+            chmod +x "$replacement"
+            mv -f "$replacement" "$hook"
+        else
+            # Noclobber also refuses a hook created after the check above.
+            (set -C; printf '%s\n' "$stub" >"$hook")
+            chmod +x "$hook"
+        fi
         echo "agent-doctor > installed claim guard: $hook"
     )
     exit $?

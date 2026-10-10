@@ -97,12 +97,17 @@ Host commands never run Git in agent-writable clones. Writers export plain data 
 ## Host commit guard
 
 Do not edit a project's tracked files on the host while a session holds it.
-`agent-status --held <repo-path>` prints the holding workspace ids, one per line,
-and exits **0 when held**, **1 when not held**, or **2 for invalid input/check errors**.
+`agent-status --held <repo-path>` prints the holding workspace ids and unit
+ActiveState, tab-separated, one per line. It exits **0 when held**, **3 when not
+held**, or **2 for invalid input/record errors**. Other failures are also errors,
+never a not-held answer.
 Paths inside the repository and symlink aliases resolve to the same checkout.
-Both writers and read-only sessions hold the repository. Running records are
+Only writer sessions hold the repository; read-only reviews do not conflict
+with host commits. Records without `read_only` count as writers. Running records are
 checked against the unit: stopped units release stale holds; unavailable manager
-state conservatively retains them. No sessions means no hold and no unit query.
+state conservatively retains them, shown as `unavailable`. A failed unit query
+also retains the hold, even if it printed a stopped state. Corrupt or unreadable
+session records refuse the check. No sessions means no hold and no unit query.
 
 Opt in separately in each **host clone**:
 
@@ -111,9 +116,16 @@ agent-doctor --install-hooks /path/to/repository
 ```
 
 This installs an executable `pre-commit` hook at Git's hooks path (honoring
-`core.hooksPath`), refuses to replace an existing different hook, and is safe to
-repeat. It never installs silently or into workspace snapshots. The host's Git
-process must have the sandbox's `bin/` on `PATH`. The hook names every holding
+`core.hooksPath`), refuses to replace a human's hook, and is safe to repeat.
+The installed stub forwards to this tool checkout's `lib/agent-pre-commit.sh`, so
+moving that checkout's revision updates the guard without reinstalling hooks.
+Reinstalling upgrades old byte-copied guards identified by their
+`# Installed explicitly by agent-doctor --install-hooks. Host PATH declares tools.`
+marker line; unmarked hooks and symlinks are never replaced. If the installed
+checkout moves or disappears, commits fail closed until the guard is reinstalled.
+It never installs silently or into workspace snapshots. The guard resolves
+`bin/agent-status` beside its own checkout, not from the host's `PATH`; a missing
+command fails closed. The hook names every holding
 workspace and refuses the commit; check failures also refuse rather than silently
 allowing a commit. Only the human's explicit `git commit --no-verify` bypasses it;
 there is no sandbox bypass setting.
@@ -121,6 +133,10 @@ there is no sandbox bypass setting.
 This is a commit-time coordination guard, not a file lock: it does not prevent
 editing, and a session can start after the check. It tracks the host checkout
 named by the workspace manifest, not every independent clone of the same remote.
+Manifest `.repo` paths must be absolute; relative paths are refused, not resolved
+against the caller's directory. Linked Git worktrees are distinct checkouts for
+hold matching, even though their default hooks directory is shared: a hold on
+one worktree does not hold its siblings.
 It does not install a `merge=union` attribute for `.actions` files: a refused
 commit or merge conflict is preferable to a garbled action line.
 

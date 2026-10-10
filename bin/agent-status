@@ -3,7 +3,7 @@
 # On-demand summary of agent workspaces, read from their records, transcripts
 # and each workspace's system-manager unit.
 #
-#   agent-status --held <repo>      holding workspaces; exit 0 if held, 1 if not
+#   agent-status --held <repo>      workspace + unit state; exit 0 held, 3 not held
 #   agent-status                    one line per workspace
 #   agent-status <workspace> [n]    its line, then the last n tool
 #                                           calls of its newest session (default 10)
