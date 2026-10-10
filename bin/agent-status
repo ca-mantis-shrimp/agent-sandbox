@@ -3,6 +3,7 @@
 # On-demand summary of agent workspaces, read from their records, transcripts
 # and each workspace's system-manager unit.
 #
+#   agent-status --held <repo>      holding workspaces; exit 0 if held, 1 if not
 #   agent-status                    one line per workspace
 #   agent-status <workspace> [n]    its line, then the last n tool
 #                                           calls of its newest session (default 10)
@@ -21,6 +22,11 @@ tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-systemd.sh"
 . "$tool/lib/agent-runs.sh"
 runs=$(runs_dir)
+if [ "${1:-}" = --held ]; then
+    [ "$#" -eq 2 ] || { echo 'usage: agent-status --held <repo-path>' >&2; exit 2; }
+    held_workspaces "$2"
+    exit $?
+fi
 stuck=${AGENT_STUCK_SECS:-600}
 now=$(date +%s)
 
