@@ -86,7 +86,7 @@ cat >"$run/transcripts/8.jsonl" <<'J'
 {"type":"message_end","message":{"role":"assistant","stopReason":"aborted","usage":{"input":50,"output":60,"cacheRead":0,"cacheWrite":0}}}
 J
 out=$(usage ws/8)
-check "$out" '.status == "partial" and .usage.input_tokens == 5 and .source.excluded_error_or_aborted_messages == 1
+check "$out" '.status == "partial" and .usage.input_tokens == 55 and .source.error_or_aborted_messages == 1
     and (.reason | test("session_not_finished")) and .observed_providers == []'
 
 # 9: pi with no completed assistant message, or messages lacking counters.
@@ -95,12 +95,13 @@ echo '{"type":"agent_start"}' >"$run/transcripts/9.jsonl"
 check "$(usage ws/9)" '.status == "missing" and .reason == "no_assistant_message_end"'
 rec 10 '"harness":"pi","state":"finished"'
 echo '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","provider":"p","usage":{"input":1}}}' >"$run/transcripts/10.jsonl"
-check "$(usage ws/10)" '.status == "missing" and .reason == "no_completed_message_with_counters" and .observed_providers == ["p"]'
+check "$(usage ws/10)" '.status == "partial" and .reason == "message_without_counters" and .usage.input_tokens == 1
+    and .usage.output_tokens == null and .counters_complete == false and .observed_providers == ["p"]'
 
 # 11: start failure is explicit no-model evidence; zero is not fabricated;
 # a running session is incomplete; a missing transcript is missing, not zero.
 rec 11 '"harness":"claude","state":"failed","outcome":"failed:start"'
-check "$(usage ws/11)" '.status == "no_model_invocation" and .model_invoked == false and (.usage | all(. == null))'
+check "$(usage ws/11)" '.status == "missing" and .start_failed == true and .model_invoked == null and (.usage | all(. == null))'
 rec 12 '"harness":"pi","state":"running"'
 check "$(usage ws/12)" '.status == "incomplete" and .model_invoked == null'
 rec 13 '"harness":"claude","state":"failed","outcome":"failed:exit:1","transcript":"transcripts/gone.jsonl"'
@@ -115,12 +116,12 @@ check "$(usage ws/16)" '.status == "unreadable" and .usage == null'
 # Mixed workspace: JSON valid, numeric session order, aggregate counts honest.
 out=$(usage ws)
 check "$out" '.workspace == "ws" and ([.sessions[].session] == [range(1;17)])'
-check "$out" '.aggregate.sessions == 16 and .aggregate.reported == 3 and .aggregate.partial == 1
-    and .aggregate.ambiguous == 1 and .aggregate.incomplete == 1 and .aggregate.no_model_invocation == 1
+check "$out" '.aggregate.sessions == 16 and .aggregate.reported == 3
+    and .aggregate.ambiguous == 1 and .aggregate.incomplete == 1 and .aggregate.partial == 2
     and .aggregate.unreadable == 1 and .aggregate.missing == 8 and .aggregate.complete == false'
 # Reported sessions are 1, 2 and 7; 2 states no cache_creation counter.
-check "$out" '.aggregate.totals.output_tokens == {sum: 8995 + 0 + 22, observed_sessions: 3, missing_sessions: 0}
-    and .aggregate.totals.cache_creation_input_tokens == {sum: 304, observed_sessions: 2, missing_sessions: 1}
+check "$out" '(.aggregate.totals.output_tokens | .sum == 8995 + 0 + 22 and .observed_sessions == 3 and .missing_sessions == 0)
+    and (.aggregate.totals.cache_creation_input_tokens | .sum == 304 and .observed_sessions == 2 and .missing_sessions == 1)
     and .aggregate.totals.input_tokens.sum == 23'
 
 # A fully reported workspace is complete; an empty one has no totals and is not complete.
@@ -136,4 +137,97 @@ for bad in nosuch ws/99 ws/x ../ws ws/1/2; do
     if usage "$bad" >"$tmp/o" 2>"$tmp/e"; then echo "unexpected success: $bad" >&2; exit 1; fi
     [ ! -s "$tmp/o" ] && [ -s "$tmp/e" ]
 done
+
+# --- review regressions, in their own workspace ---
+neg="$AGENT_RUNS/neg"
+mkdir -p "$neg/sessions" "$neg/transcripts"
+echo '{"repo":"/nowhere"}' >"$neg/manifest.json"
+nrec() { printf '{"n":%s,%s}\n' "$1" "$2" >"$neg/sessions/$1.json"; }
+nusage() { sh "$tool/bin/agent-usage" "$@"; }
+
+# failed:start with transcript consumption is reported, never "no model".
+nrec 1 '"harness":"claude","state":"failed","outcome":"failed:start"'
+echo '{"type":"result","usage":{"input_tokens":1,"cache_creation_input_tokens":2,"cache_read_input_tokens":3,"output_tokens":4}}' >"$neg/transcripts/1.jsonl"
+check "$(nusage neg/1)" '.status == "reported" and .start_failed == true and .model_invoked == true and .usage.output_tokens == 4'
+
+# An aborted-only pi session keeps its stated consumption as partial.
+nrec 2 '"harness":"pi","state":"failed","outcome":"stopped"'
+echo '{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","usage":{"input":50,"output":60,"cacheRead":0,"cacheWrite":0}}}' >"$neg/transcripts/2.jsonl"
+check "$(nusage neg/2)" '.status == "partial" and .usage.input_tokens == 50 and .usage.output_tokens == 60 and (.reason | test("error_or_aborted"))'
+
+# Hostile valid JSON: the row stays, later sessions survive, exit is 0.
+nrec 3 '"harness":"pi","state":"finished"'
+printf '%s\n' '{"type":"message_end","message":"hostile"}' '{"type":"message_end","message":{"role":"assistant","stopReason":"stop","usage":"x"}}' >"$neg/transcripts/3.jsonl"
+check "$(nusage neg/3)" '.status == "missing" and .source.malformed_message_ends == 1'
+nrec 4 '"harness":"claude","state":"finished"'
+echo '{"type":"result","usage":{"input_tokens":-1,"cache_creation_input_tokens":1.5,"cache_read_input_tokens":"7","output_tokens":null}}' >"$neg/transcripts/4.jsonl"
+check "$(nusage neg/4)" '.status == "missing" and .reason == "result_counters_invalid" and (.usage | all(. == null))'
+nrec 5 '"harness":["pi"],"state":{"x":1},"model":3,"ok":"yes"'
+check "$(nusage neg/5)" '.harness == null and .state == null and .record_model == null and .ok == null and .status == "missing"'
+printf '{"n":6}\n{"n":6}\n' >"$neg/sessions/6.json"
+check "$(nusage neg/6)" '.status == "unreadable" and .reason == "record_unreadable"'
+nrec 7 '"harness":"claude","state":"finished"'
+echo '{"type":"result","usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1,"output_tokens":1}}' >"$neg/transcripts/7.jsonl"
+out=$(nusage neg) || { echo "workspace read failed" >&2; exit 1; }
+check "$out" '[.sessions[].session] == [1,2,3,4,5,6,7] and .aggregate.sessions == 7 and .aggregate.complete == false'
+
+# Reported with unknown counters is not complete; a truncated extra line next to a result is not complete.
+mkdir -p "$AGENT_RUNS/cx/sessions" "$AGENT_RUNS/cx/transcripts"
+echo '{"repo":"/nowhere"}' >"$AGENT_RUNS/cx/manifest.json"
+printf '{"n":1,"harness":"claude","state":"finished"}\n' >"$AGENT_RUNS/cx/sessions/1.json"
+echo '{"type":"result","usage":{"output_tokens":0}}' >"$AGENT_RUNS/cx/transcripts/1.jsonl"
+out=$(usage cx)
+check "$out" '.sessions[0].status == "reported" and .sessions[0].counters_complete == false and .aggregate.complete == false
+    and .aggregate.totals.input_tokens.unobserved_sessions == 1 and .aggregate.totals.input_tokens.missing_sessions == 1'
+cp "$run/transcripts/1.jsonl" "$AGENT_RUNS/cx/transcripts/1.jsonl"
+printf '%s' '{"type":"result","usage":{"input_tok' >>"$AGENT_RUNS/cx/transcripts/1.jsonl"
+check "$(usage cx/1)" '.status == "partial" and (.reason | test("malformed_lines")) and .usage.output_tokens == 8995'
+check "$(usage cx)" '.aggregate.complete == false and .aggregate.totals.output_tokens.sum == null and .aggregate.totals.output_tokens.lower_bound_sum == 8995'
+
+# pi duplicates: identified repeats count once (partial); unidentified repeats are ambiguous;
+# distinct calls with equal usage are both counted; pending/absent stopReason is partial.
+u='"usage":{"input":1,"output":2,"cacheRead":3,"cacheWrite":4}'
+mkdir -p "$AGENT_RUNS/dp/sessions" "$AGENT_RUNS/dp/transcripts"
+echo '{"repo":"/nowhere"}' >"$AGENT_RUNS/dp/manifest.json"
+for i in 1 2 3 4; do printf '{"n":%s,"harness":"pi","state":"finished"}\n' $i >"$AGENT_RUNS/dp/sessions/$i.json"; done
+m1='{"type":"message_end","message":{"role":"assistant","stopReason":"stop","timestamp":1,'"$u"'}}'
+m2='{"type":"message_end","message":{"role":"assistant","stopReason":"stop","timestamp":2,'"$u"'}}'
+mn='{"type":"message_end","message":{"role":"assistant","stopReason":"stop",'"$u"'}}'
+printf '%s\n%s\n' "$m1" "$m1" >"$AGENT_RUNS/dp/transcripts/1.jsonl"
+check "$(usage dp/1)" '.status == "partial" and .usage.input_tokens == 1 and .source.duplicate_messages_dropped == 1'
+printf '%s\n%s\n' "$mn" "$mn" >"$AGENT_RUNS/dp/transcripts/2.jsonl"
+check "$(usage dp/2)" '.status == "ambiguous" and (.usage | all(. == null))'
+printf '%s\n%s\n' "$m1" "$m2" >"$AGENT_RUNS/dp/transcripts/3.jsonl"
+check "$(usage dp/3)" '.status == "reported" and .usage.input_tokens == 2 and .usage.output_tokens == 4'
+echo '{"type":"message_end","message":{"role":"assistant","timestamp":1,'"$u"'}}' >"$AGENT_RUNS/dp/transcripts/4.jsonl"
+check "$(usage dp/4)" '.status == "partial" and (.reason | test("message_not_terminal")) and .usage.input_tokens == 1'
+
+# Reads stay inside transcripts/: file and directory symlinks and other run files are refused.
+# Synthetic outside data only.
+mkdir -p "$AGENT_RUNS/sy/sessions" "$AGENT_RUNS/sy/transcripts" "$tmp/outdir" "$AGENT_RUNS/sy/pi"
+echo '{"repo":"/nowhere"}' >"$AGENT_RUNS/sy/manifest.json"
+good='{"type":"result","usage":{"input_tokens":9,"cache_creation_input_tokens":9,"cache_read_input_tokens":9,"output_tokens":9}}'
+echo "$good" >"$tmp/outdir/1.jsonl"
+echo "$good" >"$AGENT_RUNS/sy/pi/shared.json"
+ln -s "$tmp/outdir/1.jsonl" "$AGENT_RUNS/sy/transcripts/1.jsonl"
+ln -s "$tmp/outdir" "$AGENT_RUNS/sy/transcripts/d"
+printf '{"n":1,"harness":"claude","state":"finished"}\n' >"$AGENT_RUNS/sy/sessions/1.json"
+printf '{"n":2,"harness":"claude","state":"finished","transcript":"transcripts/d/1.jsonl"}\n' >"$AGENT_RUNS/sy/sessions/2.json"
+printf '{"n":3,"harness":"claude","state":"finished","transcript":"pi/shared.json"}\n' >"$AGENT_RUNS/sy/sessions/3.json"
+for i in 1 2 3; do check "$(usage sy/$i)" '.status == "missing" and .reason == "transcript_unavailable" and (.usage | all(. == null))'; done
+mkdir -p "$tmp/real"; rm -rf "$AGENT_RUNS/sy/transcripts"; ln -s "$tmp/real" "$AGENT_RUNS/sy/transcripts"
+printf '{"n":4,"harness":"claude","state":"finished"}\n' >"$AGENT_RUNS/sy/sessions/4.json"
+echo "$good" >"$tmp/real/4.jsonl"
+check "$(usage sy/4)" '.status == "missing" and .reason == "transcript_unavailable"'
+# A session record that is a symlink out of sessions/ is unreadable.
+ln -s "$tmp/real/4.jsonl" "$AGENT_RUNS/sy/sessions/5.json"
+check "$(usage sy/5)" '.status == "unreadable"'
+
+# A transcript that cannot be read still yields a row, and the workspace exits 0.
+if [ "$(id -u)" != 0 ]; then
+    printf '{"n":1,"harness":"claude","state":"finished"}\n' >"$AGENT_RUNS/cx/sessions/1.json"
+    chmod 000 "$AGENT_RUNS/cx/transcripts/1.jsonl"
+    out=$(usage cx) && check "$out" '.sessions[0].status == "missing" and .aggregate.sessions == 1'
+    chmod 600 "$AGENT_RUNS/cx/transcripts/1.jsonl"
+fi
 echo "usage tests passed"
