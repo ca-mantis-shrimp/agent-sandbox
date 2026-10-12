@@ -83,6 +83,7 @@ Run these from the host, not inside an agent session.
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
+| read completed-session token usage as JSON | `agent-usage <workspace>[/<n>]` |
 | see workspaces or recent tool calls | `agent-status [<workspace> [n]]` |
 | check whether a repository is held | `agent-status --held <repo-path>` |
 | explicitly install the host commit guard | `agent-doctor --install-hooks <repo-path>` |
@@ -93,6 +94,16 @@ Run these from the host, not inside an agent session.
 Host commands never run Git in agent-writable clones. Writers export plain data inside the sandbox; harvest fetches bundles into real repositories. Missing or invalid commit exports are reported as JSON `null` (unknown), and harvest/land refuse them. Read-only and gate sessions do not export. Harvest and land require the latest writer's valid export, never an older writer's: SIGKILL or OOM can prevent the EXIT trap from exporting. If they report `session <n> left no export (killed?)`, run a short writer to export the retained commits, for example `agent-run --in <ws> --prompt "Commit nothing; end."`, then harvest again. Bundles are named `root.bundle` for the root and `sm-<URI-encoded-path>.bundle` for submodules.
 
 `AGENT_SESSION_USD` defaults to $3 per session. The static unit defaults to a six-hour deadline, 60-second stop grace, and per-session limits of 8 CPUs and 16G memory with no swap. CPU and memory limits are the unit's defaults; `AGENT_CPUS` and `AGENT_MEMORY` are gone. Limits belong to the host: use unit overrides for defaults, or override one run with `systemctl set-property agent@<workspace>.service CPUQuota=400% MemoryMax=8G`, not runner-generated units. Follow a session with `journalctl -u agent@<workspace>.service -f`. Starts and stops use the system manager with `--no-ask-password`, never the user manager.
+
+## Session usage
+
+`agent-usage <workspace>[/<n>]` reads each session's record and transcript (headless Claude stream or pi JSON) and prints JSON: per-session counters named `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, plus an aggregate. It makes no API calls, reads no credentials or `run.env`, and estimates no cost. Interactive session files and live snapshots are out of scope.
+
+- **Claude:** the final `type=result` `.usage` only; preliminary `assistant` usage is ignored (it undercounts). No result, several results or no counters is `missing`/`ambiguous`, never a guess.
+- **Pi:** the sum of completed assistant `message_end` usage (`input`, `output`, `cacheRead`→`cache_read…`, `cacheWrite`→`cache_creation…`), never `message_update` deltas. In pi's normalization for the OpenAI-style and Anthropic adapters, `input` excludes cache reads and writes, and `output` includes reasoning; other adapters were not checked. Pi writes 0 when a provider omits a counter, so a pi zero may mean unreported. Error or aborted messages are excluded and make the session `partial` (a lower bound), as does an unfinished session.
+- **Status** per session: `reported`, `partial`, `missing`, `ambiguous`, `incomplete` (still running), `unreadable`, or `no_model_invocation` (only for record outcome `failed:start`). Counters are `null` when unknown; `0` means the transcript stated zero. A missing transcript is not zero.
+- **Aggregate** totals sum only `reported` sessions, each field with `observed_sessions`/`missing_sessions`; `complete` is true only when every session is reported or provably model-free.
+- **Model and route:** `record_model` is the requested model; `observed_models` and `observed_providers` appear only when the transcript carries them (Claude's `system.init` model; pi's per-message `provider`). A provider is the pi route, not a billing account or subscription. Claude's route is unknown, and older sessions are never inferred from the current `run.env`.
 
 ## Host commit guard
 
