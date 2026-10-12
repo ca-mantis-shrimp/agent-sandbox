@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Print token usage of completed headless sessions as JSON, from the session
+# records and transcripts the runner already keeps. Read-only: no API calls, no
+# credentials, no run.env, no Git, no cost estimate.
+#
+#   agent-usage <workspace>        every session, plus an aggregate
+#   agent-usage <workspace>/<n>    that session
+#
+# Each session has status reported | partial | missing | ambiguous | incomplete
+# | no_model_invocation | unreadable. Counters are null when unknown; 0 means the
+# transcript stated zero. See lib/agent-usage.jq for the rules. Exit 0 whenever
+# JSON is printed, 1 for unknown workspace or session.
+set -eu
+
+ref=${1:?usage: agent-usage <workspace>[/<n>]}
+[ $# -eq 1 ] || { echo "usage: agent-usage <workspace>[/<n>]" >&2; exit 1; }
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-runs.sh"
+ws=$(ref_workspace "$ref")
+n=$(ref_session "$ref")
+case "$ws" in "" | . | .. | */* | -*) echo "agent-usage > bad workspace $ws" >&2; exit 1 ;; esac
+case "$n" in *[!0-9]*) echo "agent-usage > bad session $n" >&2; exit 1 ;; esac
+run="$(runs_dir)/$ws"
+[ -f "$run/manifest.json" ] || { echo "agent-usage > no workspace $ws" >&2; exit 1; }
+[ -z "$n" ] || [ -f "$run/sessions/$n.json" ] || { echo "agent-usage > no session $ws/$n" >&2; exit 1; }
+
+one() { # <n>: one session's JSON object
+    rec="$run/sessions/$1.json"
+    if ! jq -e 'type == "object"' "$rec" >/dev/null 2>&1; then
+        jq -n --arg ws "$ws" --argjson n "$1" '{workspace: $ws, session: $n, status: "unreadable",
+            reason: "record_unreadable", usage: null, model_invoked: null}'
+        return
+    fi
+    t=$(jq -r '.transcript // empty | select(type == "string")' "$rec")
+    [ -n "$t" ] || t="transcripts/$1.jsonl"
+    case "$t" in /* | ../* | */../* | *..) t= ;; esac
+    if [ -n "$t" ] && [ -f "$run/$t" ] && [ -r "$run/$t" ]; then
+        jq -n -R -L "$tool/lib" --arg ws "$ws" --argjson n "$1" --slurpfile rec "$rec" \
+            'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; [inputs])' <"$run/$t"
+    else
+        jq -n -L "$tool/lib" --arg ws "$ws" --argjson n "$1" --slurpfile rec "$rec" \
+            'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; null)'
+    fi
+}
+
+if [ -n "$n" ]; then
+    one "$n"
+    exit
+fi
+for f in "$run"/sessions/*.json; do
+    [ -f "$f" ] || continue
+    b=${f##*/}
+    b=${b%.json}
+    case "$b" in *[!0-9]*) continue ;; esac
+    echo "$b"
+done | sort -n | while read -r s; do one "$s"; done |
+    jq -s -L "$tool/lib" --arg ws "$ws" 'include "agent-usage";
+        {workspace: $ws, sessions: ., aggregate: aggregate(.)}'
