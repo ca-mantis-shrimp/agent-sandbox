@@ -8,7 +8,7 @@
 #   agent-usage <workspace>/<n>    that session
 #
 # Each session has status reported | partial | missing | ambiguous | incomplete
-# | no_model_invocation | unreadable. Counters are null when unknown; 0 means the
+# | unreadable. Counters are null when unknown; 0 means the
 # transcript stated zero. See lib/agent-usage.jq for the rules. Exit 0 whenever
 # JSON is printed, 1 for unknown workspace or session.
 set -eu
@@ -25,35 +25,62 @@ run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { echo "agent-usage > no workspace $ws" >&2; exit 1; }
 [ -z "$n" ] || [ -f "$run/sessions/$n.json" ] || { echo "agent-usage > no session $ws/$n" >&2; exit 1; }
 
-one() { # <n>: one session's JSON object
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+confined() { # <file> <dir>: a regular file whose real path, symlinks resolved, is inside real <dir>
+    d=$(readlink -f -- "$2") && f=$(readlink -f -- "$1") || return 1
+    [ "$d" = "$(readlink -f -- "$run")/${d##*/}" ] || return 1
+    case "$f" in "$d"/*) [ -f "$f" ] && [ -r "$f" ] ;; *) return 1 ;; esac
+}
+
+unreadable() { # <n> <reason>
+    jq -n --arg ws "$ws" --arg n "$1" --arg why "$2" '{workspace: $ws, session: ($n | tonumber), status: "unreadable",
+        reason: $why, usage: null, model_invoked: null, counters_complete: false}'
+}
+
+reduce() { # <n>: the session's JSON object, or failure
     rec="$run/sessions/$1.json"
-    if ! jq -e 'type == "object"' "$rec" >/dev/null 2>&1; then
-        jq -n --arg ws "$ws" --argjson n "$1" '{workspace: $ws, session: $n, status: "unreadable",
-            reason: "record_unreadable", usage: null, model_invoked: null}'
-        return
-    fi
-    t=$(jq -r '.transcript // empty | select(type == "string")' "$rec")
+    confined "$rec" "$run/sessions" && jq -s -e 'length == 1 and (.[0] | type == "object")' "$rec" >/dev/null 2>&1 ||
+        return 2
+    t=$(jq -r '.transcript // empty | select(type == "string")' "$rec") || return 1
     [ -n "$t" ] || t="transcripts/$1.jsonl"
     case "$t" in /* | ../* | */../* | *..) t= ;; esac
-    if [ -n "$t" ] && [ -f "$run/$t" ] && [ -r "$run/$t" ]; then
-        jq -n -R -L "$tool/lib" --arg ws "$ws" --argjson n "$1" --slurpfile rec "$rec" \
+    if [ -n "$t" ] && confined "$run/$t" "$run/transcripts"; then
+        jq -n -R -L "$tool/lib" --arg ws "$ws" --arg n "$1" --slurpfile rec "$rec" \
             'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; [inputs])' <"$run/$t"
     else
-        jq -n -L "$tool/lib" --arg ws "$ws" --argjson n "$1" --slurpfile rec "$rec" \
+        jq -n -L "$tool/lib" --arg ws "$ws" --arg n "$1" --slurpfile rec "$rec" \
             'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; null)'
     fi
 }
 
+one() { # <n>: always one row; a failed read or reduction is an unreadable row, never an omission
+    if reduce "$1" >"$tmp/row" 2>/dev/null; then
+        jq -e 'type == "object"' "$tmp/row" >/dev/null 2>&1 || { unreadable "$1" usage_reduction_failed; return; }
+        cat "$tmp/row"
+    else
+        case $? in
+            2) unreadable "$1" record_unreadable ;;
+            *) unreadable "$1" usage_reduction_failed ;;
+        esac
+    fi
+}
+
 if [ -n "$n" ]; then
-    one "$n"
+    one "$n" >"$tmp/out"
+    cat "$tmp/out"
     exit
 fi
 for f in "$run"/sessions/*.json; do
-    [ -f "$f" ] || continue
+    [ -f "$f" ] || [ -L "$f" ] || continue
     b=${f##*/}
     b=${b%.json}
-    case "$b" in *[!0-9]*) continue ;; esac
+    case "$b" in "" | *[!0-9]*) continue ;; esac
     echo "$b"
-done | sort -n | while read -r s; do one "$s"; done |
-    jq -s -L "$tool/lib" --arg ws "$ws" 'include "agent-usage";
-        {workspace: $ws, sessions: ., aggregate: aggregate(.)}'
+done | sort -n >"$tmp/list"
+: >"$tmp/rows"
+while read -r s; do one "$s" >>"$tmp/rows"; done <"$tmp/list"
+jq -s -L "$tool/lib" --arg ws "$ws" 'include "agent-usage";
+    {workspace: $ws, sessions: ., aggregate: aggregate(.)}' "$tmp/rows" >"$tmp/out"
+cat "$tmp/out"
