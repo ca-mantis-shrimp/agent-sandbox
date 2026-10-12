@@ -115,10 +115,10 @@ check "$(usage ws/16)" '.status == "unreadable" and .usage == null'
 # Mixed workspace: JSON valid, numeric session order, aggregate counts honest.
 out=$(usage ws)
 check "$out" '.workspace == "ws" and ([.sessions[].session] == [range(1;17)])'
-check "$out" '.aggregate.sessions == 16 and .aggregate.reported == 4 and .aggregate.partial == 1
+check "$out" '.aggregate.sessions == 16 and .aggregate.reported == 3 and .aggregate.partial == 1
     and .aggregate.ambiguous == 1 and .aggregate.incomplete == 1 and .aggregate.no_model_invocation == 1
-    and .aggregate.unreadable == 1 and .aggregate.missing == 7 and .aggregate.complete == false'
-# Reported: 1, 2, 7 and the session-14 slot is missing; 15 is missing. So three reported + ...
+    and .aggregate.unreadable == 1 and .aggregate.missing == 8 and .aggregate.complete == false'
+# Reported sessions are 1, 2 and 7; 2 states no cache_creation counter.
 check "$out" '.aggregate.totals.output_tokens == {sum: 8995 + 0 + 22, observed_sessions: 3, missing_sessions: 0}
     and .aggregate.totals.cache_creation_input_tokens == {sum: 304, observed_sessions: 2, missing_sessions: 1}
     and .aggregate.totals.input_tokens.sum == 23'
