@@ -258,4 +258,38 @@ if [ "$(id -u)" != 0 ]; then
     chmod 700 "$AGENT_RUNS/ud/sessions"
     check "$(usage ud)" '.aggregate.sessions == 1'
 fi
+# Session identifiers are canonical positive decimals of at most 15 digits; aliases are refused, never counted twice.
+reject() { # <args...>: nonzero, no stdout
+    if out=$(usage "$@" 2>/dev/null); then echo "FAIL accepted: $*"; exit 1; fi
+    [ -z "$out" ] || { echo "FAIL printed output: $*"; exit 1; }
+}
+mkid() { # <workspace>
+    mkdir -p "$AGENT_RUNS/$1/sessions" "$AGENT_RUNS/$1/transcripts"
+    echo '{"repo":"/nowhere"}' >"$AGENT_RUNS/$1/manifest.json"
+}
+idrec='{"n":1,"harness":"claude","state":"finished"}'
+idtr='{"type":"result","usage":{"input_tokens":1,"cache_creation_input_tokens":1,"cache_read_input_tokens":1,"output_tokens":1}}'
+mkid id1; printf '%s\n' "$idrec" >"$AGENT_RUNS/id1/sessions/1.json"; printf '%s\n' "$idrec" >"$AGENT_RUNS/id1/sessions/01.json"
+echo "$idtr" >"$AGENT_RUNS/id1/transcripts/1.jsonl"
+reject id1
+mkid id2; printf '%s\n' "$idrec" >"$AGENT_RUNS/id2/sessions/01.json"
+reject id2
+reject id1/01
+reject id2/01
+for bad in 0 00 001 9007199254740993 1000000000000000; do
+    mkid id3; printf '%s\n' "$idrec" >"$AGENT_RUNS/id3/sessions/$bad.json"
+    reject id3/$bad
+    reject id3
+    rm "$AGENT_RUNS/id3/sessions/$bad.json"
+done
+# Distinct canonical sessions still count once each, including the largest safe width.
+mkid id4
+for i in 1 10 999999999999999; do
+    printf '{"n":%s,"harness":"claude","state":"finished"}\n' "$i" >"$AGENT_RUNS/id4/sessions/$i.json"
+    echo "$idtr" >"$AGENT_RUNS/id4/transcripts/$i.jsonl"
+done
+out=$(usage id4)
+check "$out" '[.sessions[].session] == [1, 10, 999999999999999] and .aggregate.sessions == 3
+    and .aggregate.totals.output_tokens.sum == 3'
+check "$(usage id4/999999999999999)" '.session == 999999999999999 and .status == "reported"'
 echo "usage tests passed"
