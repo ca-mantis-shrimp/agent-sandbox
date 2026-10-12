@@ -28,9 +28,9 @@ run="$(runs_dir)/$ws"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-confined() { # <file> <dir>: a regular file whose real path, symlinks resolved, is inside real <dir>
-    d=$(readlink -f -- "$2") && f=$(readlink -f -- "$1") || return 1
-    [ "$d" = "$(readlink -f -- "$run")/${d##*/}" ] || return 1
+confined() { # <file> <name>: a regular file whose real path, symlinks resolved, is inside the run's real <name> (sessions|transcripts)
+    d=$(readlink -f -- "$run/$2") && f=$(readlink -f -- "$1") || return 1
+    [ "$d" = "$(readlink -f -- "$run")/$2" ] || return 1
     case "$f" in "$d"/*) [ -f "$f" ] && [ -r "$f" ] ;; *) return 1 ;; esac
 }
 
@@ -41,12 +41,12 @@ unreadable() { # <n> <reason>
 
 reduce() { # <n>: the session's JSON object, or failure
     rec="$run/sessions/$1.json"
-    confined "$rec" "$run/sessions" && jq -s -e 'length == 1 and (.[0] | type == "object")' "$rec" >/dev/null 2>&1 ||
+    confined "$rec" sessions && jq -s -e 'length == 1 and (.[0] | type == "object")' "$rec" >/dev/null 2>&1 ||
         return 2
     t=$(jq -r '.transcript // empty | select(type == "string")' "$rec") || return 1
     [ -n "$t" ] || t="transcripts/$1.jsonl"
     case "$t" in /* | ../* | */../* | *..) t= ;; esac
-    if [ -n "$t" ] && confined "$run/$t" "$run/transcripts"; then
+    if [ -n "$t" ] && confined "$run/$t" transcripts; then
         jq -n -R -L "$tool/lib" --arg ws "$ws" --arg n "$1" --slurpfile rec "$rec" \
             'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; [inputs])' <"$run/$t"
     else
@@ -71,6 +71,11 @@ if [ -n "$n" ]; then
     one "$n" >"$tmp/out"
     cat "$tmp/out"
     exit
+fi
+if [ -e "$run/sessions" ] || [ -L "$run/sessions" ]; then
+    sd=$(readlink -f -- "$run/sessions") && [ "$sd" = "$(readlink -f -- "$run")/sessions" ] &&
+        [ -d "$sd" ] && [ -r "$sd" ] && [ -x "$sd" ] ||
+        { echo "agent-usage > sessions of $ws cannot be enumerated" >&2; exit 1; }
 fi
 for f in "$run"/sessions/*.json; do
     [ -f "$f" ] || [ -L "$f" ] || continue
