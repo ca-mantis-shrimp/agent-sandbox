@@ -230,4 +230,32 @@ if [ "$(id -u)" != 0 ]; then
     out=$(usage cx) && check "$out" '.sessions[0].status == "missing" and .aggregate.sessions == 1'
     chmod 600 "$AGENT_RUNS/cx/transcripts/1.jsonl"
 fi
+
+# Sibling alias directories: sessions/ or transcripts/ symlinked to another run directory is refused.
+mkdir -p "$AGENT_RUNS/al/pi" "$AGENT_RUNS/al/sessions" "$AGENT_RUNS/al2/pi"
+echo '{"repo":"/nowhere"}' >"$AGENT_RUNS/al/manifest.json"
+cp "$AGENT_RUNS/al/manifest.json" "$AGENT_RUNS/al2/manifest.json"
+echo "$good" >"$AGENT_RUNS/al/pi/shared.json"
+ln -s pi "$AGENT_RUNS/al/transcripts"
+printf '{"n":1,"harness":"claude","state":"finished","transcript":"transcripts/shared.json"}\n' >"$AGENT_RUNS/al/sessions/1.json"
+check "$(usage al/1)" '.status == "missing" and .reason == "transcript_unavailable" and (.usage | all(. == null))'
+printf '{"n":1,"harness":"claude","state":"finished"}\n' >"$AGENT_RUNS/al2/pi/1.json"
+ln -s pi "$AGENT_RUNS/al2/sessions"
+check "$(usage al2/1)" '.status == "unreadable"'
+if out=$(usage al2 2>/dev/null); then echo "FAIL aliased sessions enumerated"; exit 1; fi
+[ -z "$out" ] || { echo "FAIL aliased sessions printed output"; exit 1; }
+
+# An unenumerable sessions directory fails without stdout; it is not an empty workspace.
+if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$AGENT_RUNS/ud/sessions"
+    echo '{"repo":"/nowhere"}' >"$AGENT_RUNS/ud/manifest.json"
+    printf '{"n":1,"harness":"claude","state":"finished"}\n' >"$AGENT_RUNS/ud/sessions/1.json"
+    for mode in 000 100 300; do
+        chmod $mode "$AGENT_RUNS/ud/sessions"
+        if out=$(usage ud 2>/dev/null); then chmod 700 "$AGENT_RUNS/ud/sessions"; echo "FAIL chmod $mode enumerated"; exit 1; fi
+        [ -z "$out" ] || { chmod 700 "$AGENT_RUNS/ud/sessions"; echo "FAIL chmod $mode printed output"; exit 1; }
+    done
+    chmod 700 "$AGENT_RUNS/ud/sessions"
+    check "$(usage ud)" '.aggregate.sessions == 1'
+fi
 echo "usage tests passed"
