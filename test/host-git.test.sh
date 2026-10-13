@@ -113,6 +113,34 @@ cp "$run/exports/1/sm-sub.bundle" "$run/exports/2/sm-sub.bundle"
 "$tool/bin/agent-harvest" safe >"$tmp/harvest.log" 2>&1
 ! grep -q 'is okay' "$tmp/harvest.log"
 [ "$(grep -c -- '-c transfer.fsckObjects=true fetch' "$GIT_LOG")" -ge 2 ]
+
+# A repaired workspace history replaces the host harvest branch and reports
+# both tips instead of silently refusing a non-fast-forward fetch.
+old_tip=$(git -C "$repo" rev-parse agent/safe)
+git -C "$run/work" reset -q --hard refs/agent/base
+printf rewrite >"$run/work/rewrite"
+git -C "$run/work" add rewrite
+git -C "$run/work" commit -q -m rewrite
+new_tip=$(git -C "$run/work" rev-parse HEAD)
+git -C "$run/work" bundle create "$run/exports/2/root.bundle" refs/agent/base..agent/safe >/dev/null
+git -C "$run/work" bundle create "$tmp/missing-ref.bundle" unrelated 2>/dev/null || {
+    git -C "$run/work" branch unrelated HEAD
+    git -C "$run/work" bundle create "$tmp/missing-ref.bundle" unrelated >/dev/null
+}
+jq --arg tip "$new_tip" '.".".base=[$tip]' "$run/exports/2.json" >"$run/exports/2.tmp"
+mv "$run/exports/2.tmp" "$run/exports/2.json"
+"$tool/bin/agent-harvest" safe >"$tmp/harvest-rewrite.log" 2>&1
+grep -Fq "agent-harvest > $repo: replaced agent/safe $old_tip -> $new_tip" "$tmp/harvest-rewrite.log"
+[ "$(git -C "$repo" rev-parse agent/safe)" = "$new_tip" ]
+
+# A valid bundle without the requested ref still reports Git's fetch failure,
+# the host repo and target branch, and exits unsuccessfully.
+cp "$run/exports/2/root.bundle" "$tmp/rewrite.bundle"
+cp "$tmp/missing-ref.bundle" "$run/exports/2/root.bundle"
+if "$tool/bin/agent-harvest" safe >"$tmp/harvest-failure.log" 2>&1; then exit 1; fi
+grep -Fq "agent-harvest > $repo: could not fetch agent/safe:" "$tmp/harvest-failure.log"
+grep -Fq "couldn't find remote ref agent/safe" "$tmp/harvest-failure.log"
+mv "$tmp/rewrite.bundle" "$run/exports/2/root.bundle"
 if GATE_STATUS=1 "$tool/bin/agent-land" safe >"$tmp/land.log" 2>&1; then exit 1; fi
 [ ! -e "$MARKER" ]
 "$tool/bin/agent-land" safe >"$tmp/land.log" 2>&1
