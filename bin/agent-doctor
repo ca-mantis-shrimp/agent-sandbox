@@ -49,6 +49,22 @@ failed=0
 ok() { printf 'agent-doctor > ok       %s\n' "$*"; }
 missing() { printf 'agent-doctor > MISSING  %s\n' "$*"; failed=1; }
 note() { printf 'agent-doctor > note     %s\n' "$*"; }
+# Never source release metadata: it is data, not shell code.
+release=${AGENT_HOST_RELEASE:-/usr/lib/extension-release.d/extension-release.agent-sandbox}
+if [ -f "$release" ]; then
+    installed_commit=$(awk -F= '$1 == "AGENT_SANDBOX_COMMIT" {print $2}' "$release")
+    installed_tree=$(awk -F= '$1 == "AGENT_SANDBOX_SYSTEM_TREE" {print $2}' "$release")
+    checkout_commit=$(git -C "$tool" rev-parse --short=12 HEAD 2>/dev/null)
+    checkout_tree=$(git -C "$tool" rev-parse HEAD:system 2>/dev/null)
+    short_commit=$(printf '%.12s' "$installed_commit")
+    if [ -n "$checkout_tree" ] && [ "$installed_tree" = "$checkout_tree" ]; then
+        ok "host extension ($short_commit; system/ matches HEAD)"
+    else
+        missing "host extension drift: installed ${short_commit:-unknown}, checkout ${checkout_commit:-unknown}; run agent-host-build, then agent-host-install as root"
+    fi
+else
+    note 'no host extension; host may have installed system/PKGBUILD instead'
+fi
 for cmd in git jq flock systemctl; do
     if command -v "$cmd" >/dev/null; then ok "$cmd"; else missing "$cmd"; fi
 done
