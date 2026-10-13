@@ -111,7 +111,9 @@ if [ -z "$tools" ] && [ -d "$b/recipe/mkosi.tools" ]; then
     chmod u+w "$b/recipe" "$b/recipe/mkosi.tools"
     if [ ! -e "$dest" ] && mv "$b/recipe/mkosi.tools" "$dest"; then tools=$dest; fi
 fi
-defs=${AGENT_REPART_DEFINITIONS:-$(python3 -c 'import mkosi, os; print(os.path.dirname(mkosi.__file__))')/resources/repart/definitions}
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-repart.sh"
+defs=$(repart_definitions) || fail 'cannot locate repart definitions'
 for kind in sysext:"" confext:-etc; do
     unshare -r systemd-repart --definitions="$defs/${kind%%:*}-unsigned.repart.d" --copy-source="$b/out/$name" \
         --empty=create --size=auto --dry-run=no "$AGENT_LAYERS/.$name${kind#*:}.raw.new" >>"$log" 2>&1 || fail 'systemd-repart failed'

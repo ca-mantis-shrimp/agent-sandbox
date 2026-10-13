@@ -16,11 +16,42 @@ Installing is a declaration, not a script, kept wherever your environment is dec
 
 - this repository (`https://github.com/ca-mantis-shrimp/agent-sandbox`), checked out at a pinned revision or tag;
 - its `bin/` on `PATH`, directly or through symlinks;
-- the host integration shipped in `system/`, including `agent@.service`, the agent user, agents group, run-directory permissions and polkit authorization. Hosts install it through their own package/image declaration (the Arch package definition is `system/PKGBUILD`).
+- the host integration shipped in `system/`, including `agent@.service`, the agent user, agents group, run-directory permissions and polkit authorization. By default the host declares and merges an **agent-sandbox system extension**, not sandbox content in its OS image. Hosts that install packages can instead use the Arch package definition, `system/PKGBUILD`.
 
 Updating is moving that pin. A workspace keeps the harness snapshot it started with. The commands find `lib/` and `agents/` beside the real `bin/`, through any symlink, and work on the Git repository of the directory you run `agent-new` in; every later command finds that repository from the workspace's manifest.
 
 ## Host setup and images
+
+Build the host extension without root from the pinned tool checkout, then activate
+it separately as root:
+
+```sh
+agent-host-build                       # default output: ./agent-sandbox.raw
+agent-host-install ./agent-sandbox.raw # run as root (using the host's chosen tool)
+```
+
+`agent-host-build [<out.raw>]` archives **committed `system/` at HEAD**, ignoring
+working-tree edits. The output basename must be `agent-sandbox.raw` to match its
+extension-release name. Building needs `unshare` and `systemd-repart`; repart
+definitions come from `AGENT_REPART_DEFINITIONS` when set, otherwise mkosi's
+installed resources (the same lookup as `agent-layer`). The unsigned image carries
+`ID=_any`, `EXTENSION_RELOAD_MANAGER=1`, and `AGENT_SANDBOX_COMMIT` and
+`AGENT_SANDBOX_SYSTEM_TREE` provenance fields.
+Only build and install a trusted revision: this extension configures host authority.
+
+`agent-host-install` stages the image in `/var/lib/extensions/`, validates it with
+`systemd-dissect --validate`, and atomically replaces `agent-sandbox.raw` only on
+success. It runs `systemd-sysext refresh` (including manager reload), then applies
+only the sandbox's sysusers and tmpfiles configs. It refuses any other
+`agent-sandbox*` directory or `.raw` extension in `/etc/extensions`,
+`/run/extensions` or `/var/lib/extensions`, naming it rather than deleting it. The host declares persistence/merging of this extension at boot
+(for example, enabling `systemd-sysext.service`); the installer does not enable units.
+On a pin move, build and install again. `agent-doctor` compares the merged
+extension's `system/` tree id with the tool checkout's HEAD, so unrelated commits
+do not report drift. There is no automatic rebuild or install trigger.
+
+Alternatively, package-installing Arch hosts can use `system/PKGBUILD`; absence of
+a merged extension is a doctor note, not a failure. Do not install both routes.
 
 The host provides:
 

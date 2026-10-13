@@ -1,0 +1,29 @@
+#!/bin/sh
+# Build committed host integration, unprivileged. Default: ./agent-sandbox.raw.
+set -eu
+die() { echo "agent-host-build > $*" >&2; exit 1; }
+[ $# -le 1 ] || die 'usage: agent-host-build [<out.raw>]'
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-repart.sh"
+out=${1:-./agent-sandbox.raw}
+# The release name must match the image name when systemd merges it.
+[ "$(basename -- "$out")" = agent-sandbox.raw ] || die 'output must be named agent-sandbox.raw'
+dest=$(dirname -- "$out")
+[ -d "$dest" ] || die "output directory does not exist: $dest"
+commit=$(git -C "$tool" rev-parse HEAD)
+tree=$(git -C "$tool" rev-parse "$commit:system")
+b=$(mktemp -d)
+trap 'rm -rf "$b"' EXIT
+git -C "$tool" archive --output="$b/system.tar" "$commit" system
+tar -xf "$b/system.tar" -C "$b"
+release=$b/system/usr/lib/extension-release.d
+mkdir -p "$release"
+printf 'ID=_any\nEXTENSION_RELOAD_MANAGER=1\nAGENT_SANDBOX_COMMIT=%s\nAGENT_SANDBOX_SYSTEM_TREE=%s\n' "$commit" "$tree" >"$release/extension-release.agent-sandbox"
+defs=$(repart_definitions) || die 'cannot locate repart definitions (set AGENT_REPART_DEFINITIONS)'
+# Build beside the destination, then publish only a completed image.
+stage=$(mktemp -d "$dest/.agent-host-build.XXXXXX") || die "cannot stage image in output directory: $dest"
+trap 'rm -rf "$b" "$stage"' EXIT
+unshare -r systemd-repart --definitions="$defs/sysext-unsigned.repart.d" --copy-source="$b/system" \
+    --empty=create --size=auto --dry-run=no "$stage/agent-sandbox.raw"
+mv -f "$stage/agent-sandbox.raw" "$out"
+echo "agent-host-build > built $out ($commit)"
