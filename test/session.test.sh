@@ -35,6 +35,24 @@ printf 'Run kind: work\nDo the task\n' >"$AGENT_JOB/prompts/1.md"
 } >"$tmp/expected-prompt"
 [ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
 
+# The documented one-line form uses only the first plain-word token as kind.
+printf 'Run kind: review. Target: this workspace branch.\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+{
+    cat "$tool/agents/run-kinds/review.md"
+    printf '\nproject guidance\n\nRun kind: review. Target: this workspace branch.\n'
+} >"$tmp/expected-prompt"
+[ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
+
+# CR and trailing whitespace do not invalidate an otherwise plain-word kind.
+printf 'Run kind: work \r\nDo the task\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+{
+    cat "$tool/agents/run-kinds/work.md"
+    printf '\nproject guidance\n\nRun kind: work \r\nDo the task\n'
+} >"$tmp/expected-prompt"
+[ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
+
 # Non-kind prompts retain the old project-prompt then task-prompt composition.
 printf 'ordinary task\n' >"$AGENT_JOB/prompts/1.md"
 "$tool/agents/session" 1
@@ -42,13 +60,21 @@ printf 'ordinary task\n' >"$AGENT_JOB/prompts/1.md"
 
 ordinary task' ]
 
-# A Run kind header cannot select a path outside a plain-word kind name.
-for invalid_kind in '../work' 'work/fix'; do
-    printf 'Run kind: %s\nDo the task\n' "$invalid_kind" >"$AGENT_JOB/prompts/1.md"
-    if "$tool/agents/session" 1 >"$tmp/invalid-kind.log" 2>&1; then
-        echo "accepted invalid run kind: $invalid_kind" >&2
-        exit 1
-    fi
+# Empty, malformed and unknown kinds do not abort the session or select a path;
+# unmatched contracts produce one diagnostic and leave the prompt intact.
+for header in 'Run kind: ' 'Run kind: ../work' 'Run kind: mystery'; do
+    printf '%s\nDo the task\n' "$header" >"$AGENT_JOB/prompts/1.md"
+    "$tool/agents/session" 1 >"$tmp/no-contract.log" 2>&1
+    [ "$(grep -c '^session > no run-kind contract for ' "$tmp/no-contract.log")" = 1 ]
+    case "$header" in
+        'Run kind: mystery') expected_kind=mystery ;;
+        *) expected_kind= ;;
+    esac
+    grep -qx "session > no run-kind contract for $expected_kind" "$tmp/no-contract.log"
+    {
+        printf 'project guidance\n\n%s\nDo the task\n' "$header"
+    } >"$tmp/expected-prompt"
+    [ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
 done
 rm "$AGENT_JOB/work/.sandbox/prompt.md"
 printf 'prompt\n' >"$AGENT_JOB/prompts/1.md"
