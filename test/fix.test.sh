@@ -33,7 +33,7 @@ record 13 false "$report"
 jq -e '.[0:2] == ["--in","ws"] and .[2] == "--prompt"
     and .[4:] == ["--harness","pi","--model","model id","--wait"]' "$CAPTURE" >/dev/null
 prompt=$(jq -r '.[3]' "$CAPTURE")
-[ "$(printf '%s\n' "$prompt" | sed -n '1p')" = 'Run kind: fix' ]
+case "$prompt" in 'Run kind: fix. Target: '*) ;; *) echo 'fix prompt lacks one-line run-kind header' >&2; exit 1 ;; esac
 printf '%s\n' "$prompt" | grep -qF 'Target: review session ws/10.'
 printf '%s\n' "$prompt" | grep -qF 'Review verdict: land after fixes'
 # The JSON values are preserved, including extra fields and nullable locations.
