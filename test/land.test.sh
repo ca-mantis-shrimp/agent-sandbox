@@ -140,6 +140,30 @@ land detached
 [ -z "$(git -C "$root" status --porcelain)" ]
 [ ! -e "$AGENT_RUNS/land-detached/work" ]
 
+# --- a real submodule branch ahead of the root pin refuses before cloning ----
+
+workspace unpinned
+before_root=$(head_of "$root") before_sub=$(head_of "$root/sub")
+pinned=$(git -C "$root" rev-parse HEAD:sub)
+commit "$root/sub" unpinned 'real branch ahead'
+ahead=$(head_of "$root/sub")
+: >"$GATE_LOG"
+fails land unpinned
+grep -Fq "sub" "$tmp/land.log"
+grep -Fq "$pinned" "$tmp/land.log"
+grep -Fq "$ahead" "$tmp/land.log"
+grep -Fq 'commit the submodule pointer in the root first' "$tmp/land.log"
+[ ! -e "$AGENT_RUNS/land-unpinned/work" ]
+[ ! -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$ahead" ]
+# Apply the prescribed remedy and retry the same workspace.
+git -C "$root" add sub
+git -C "$root" commit -q -m 'Pin real submodule branch'
+land unpinned
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
+[ ! -e "$AGENT_RUNS/land-unpinned/work" ]
+
 # --- an interrupted build is not reused just because its directory exists ----
 
 workspace incomplete
@@ -204,7 +228,12 @@ git -C "$root" rev-parse -q --verify refs/heads/agent/red >/dev/null
 
 commit "$root" elsewhere moved
 moved_root=$(head_of "$root")
+kept_tip=$(head_of "$AGENT_RUNS/land-red/work")
+: >"$GATE_LOG"
 fails land red true
+# Refuse before starting the gate, keeping the candidate for human resolution.
+[ ! -s "$GATE_LOG" ]
+[ "$(head_of "$AGENT_RUNS/land-red/work")" = "$kept_tip" ]
 grep -q "moved since the candidate was built" "$tmp/land.log"
 [ "$(head_of "$root")" = "$moved_root" ]
 [ "$(head_of "$root/sub")" = "$before_sub" ]
