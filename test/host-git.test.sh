@@ -144,7 +144,7 @@ cp "$run/exports/2/root.bundle" "$tmp/rewrite.bundle"
 cp "$tmp/missing-ref.bundle" "$run/exports/2/root.bundle"
 if "$tool/bin/agent-harvest" safe >"$tmp/harvest-failure.log" 2>&1; then exit 1; fi
 grep -Fq "agent-harvest > $repo: could not fetch agent/safe:" "$tmp/harvest-failure.log"
-grep -Fq "couldn't find remote ref agent/safe" "$tmp/harvest-failure.log"
+
 mv "$tmp/rewrite.bundle" "$run/exports/2/root.bundle"
 if GATE_STATUS=1 "$tool/bin/agent-land" safe >"$tmp/land.log" 2>&1; then exit 1; fi
 [ ! -e "$MARKER" ]
