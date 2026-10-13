@@ -24,6 +24,11 @@ echo credential-token >"$CREDENTIALS_DIRECTORY/agent.claude_token"
 [ "$(cat "$AGENT_JOB/token-seen")" = credential-token ]
 jq -e '.ok and .closing == "done"' "$AGENT_JOB/sessions/1.json" >/dev/null
 
+# Fixers preserve the Tests: commit ordering and file-lock contract.
+grep -Fq 'A change to a test goes in its own commit whose subject starts exactly `Tests:`' "$tool/agents/run-kinds/fix.md"
+grep -Fq 'before the code it covers' "$tool/agents/run-kinds/fix.md"
+grep -Fq 'A later non-`Tests:` commit must not touch a file any earlier `Tests:` commit touched' "$tool/agents/run-kinds/fix.md"
+
 # A recognized kind contract comes from the agents snapshot and precedes both
 # the writable project's standing prompt and the caller's prompt.
 printf 'project guidance\n' >"$AGENT_JOB/work/.sandbox/prompt.md"

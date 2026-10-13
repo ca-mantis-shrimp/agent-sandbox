@@ -9,6 +9,10 @@
 # the workspace harvested. Nothing is merged, and the workspace stays usable:
 # review the branches, add more sessions and harvest again, or land them with
 # agent-land. Refuses while a session is still running in it.
+#
+# Harvest intentionally force-replaces the host's agent/<workspace> branch. That
+# branch is written only by harvest; a divergence means the workspace history
+# was rewritten. Any replaced old tip is reported to stderr for recovery.
 set -eu
 
 id=${1:?usage: agent-harvest <id>}
@@ -50,7 +54,18 @@ repo_paths "$repo" | while IFS= read -r path; do
             printf '%s\n' "$verification" >&2
             exit 1
         fi
-        git -C "$repo/$path" -c transfer.fsckObjects=true fetch -q --no-recurse-submodules "$bundle" "$branch:$branch"
+        if [ "$path" = . ]; then repo_path=$repo
+        else repo_path="$repo/$path"; fi
+        old_tip=$(git -C "$repo_path" rev-parse --verify "$branch" 2>/dev/null || :)
+        if ! fetch_error=$(git -C "$repo_path" -c transfer.fsckObjects=true fetch -q --no-recurse-submodules "$bundle" "+$branch:$branch" 2>&1); then
+            printf 'agent-harvest > %s: could not fetch %s: %s\n' "$repo_path" "$branch" "$fetch_error" >&2
+            exit 1
+        fi
+        new_tip=$(git -C "$repo_path" rev-parse --verify "$branch")
+        if [ -n "$old_tip" ] && [ "$old_tip" != "$new_tip" ] &&
+            ! git -C "$repo_path" merge-base --is-ancestor "$old_tip" "$new_tip"; then
+            printf 'agent-harvest > %s: replaced %s %s -> %s\n' "$repo_path" "$branch" "$old_tip" "$new_tip" >&2
+        fi
         rm -f "$bundle"
         printf 'agent-harvest > %s (%s commits):\n' "$path" "$(git -C "$repo/$path" rev-list --count --no-walk $commits)"
         git -C "$repo/$path" log --oneline --no-walk $commits | sed 's/^/    /'
