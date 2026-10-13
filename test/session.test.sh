@@ -15,6 +15,7 @@ git -C "$AGENT_JOB/work" update-ref refs/agent/base HEAD
 echo '{"id":"workspace"}' >"$AGENT_JOB/manifest.json"
 printf '%s\n' '#!/bin/sh' \
     'printf "%s" "${CLAUDE_CODE_OAUTH_TOKEN:-missing}" >"$AGENT_JOB/token-seen"' \
+    'printf "%s" "$1" >"$AGENT_JOB/seen-prompt"' \
     'echo '\''{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0}'\''' >"$tmp/bin/claude"
 chmod +x "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH" CREDENTIALS_DIRECTORY="$tmp/credentials"
@@ -22,6 +23,34 @@ echo credential-token >"$CREDENTIALS_DIRECTORY/agent.claude_token"
 "$tool/agents/session" 1
 [ "$(cat "$AGENT_JOB/token-seen")" = credential-token ]
 jq -e '.ok and .closing == "done"' "$AGENT_JOB/sessions/1.json" >/dev/null
+
+# A recognized kind contract comes from the agents snapshot and precedes both
+# the writable project's standing prompt and the caller's prompt.
+printf 'project guidance\n' >"$AGENT_JOB/work/.sandbox/prompt.md"
+printf 'Run kind: work\nDo the task\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+{
+    cat "$tool/agents/run-kinds/work.md"
+    printf '\nproject guidance\nRun kind: work\nDo the task\n'
+} >"$tmp/expected-prompt"
+cmp "$tmp/expected-prompt" "$AGENT_JOB/seen-prompt"
+
+# Non-kind prompts retain the old project-prompt then task-prompt composition.
+printf 'ordinary task\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+[ "$(cat "$AGENT_JOB/seen-prompt")" = 'project guidance
+ordinary task' ]
+
+# A Run kind header cannot select a path outside a plain-word kind name.
+for invalid_kind in '../work' 'work/fix'; do
+    printf 'Run kind: %s\nDo the task\n' "$invalid_kind" >"$AGENT_JOB/prompts/1.md"
+    if "$tool/agents/session" 1 >"$tmp/invalid-kind.log" 2>&1; then
+        echo "accepted invalid run kind: $invalid_kind" >&2
+        exit 1
+    fi
+done
+rm "$AGENT_JOB/work/.sandbox/prompt.md"
+printf 'prompt\n' >"$AGENT_JOB/prompts/1.md"
 rm "$CREDENTIALS_DIRECTORY/agent.claude_token"
 unset CLAUDE_CODE_OAUTH_TOKEN
 "$tool/agents/session" 1
