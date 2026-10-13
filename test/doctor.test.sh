@@ -8,6 +8,8 @@ mkdir "$tmp/links" "$tmp/runs" "$tmp/path" "$tmp/base" "$tmp/images"
 ln -s "$tool/bin/agent-status" "$tmp/links/agent-status"
 AGENT_RUNS="$tmp/runs" "$tmp/links/agent-status"
 export AGENT_RUNS="$tmp/runs"
+# Keep extension provenance independent of the host's merged installation.
+export AGENT_HOST_RELEASE="$tmp/no-host-release"
 unset AGENT_PI_PROVIDER
 mkdir "$AGENT_RUNS/.pi"
 printf '%s\n' '{"openai":{"type":"oauth","access":"test"}}' >"$AGENT_RUNS/.pi/auth.json"
