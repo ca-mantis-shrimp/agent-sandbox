@@ -8,7 +8,8 @@ trap 'rm -rf "$tmp"' EXIT
 report='{"coverage":[{"check":"behavior","how":"git diff"}],"findings":[{"severity":"blocking","file":"a","line":1,"what":"bug","why":"breaks"}],"for_human":["choose"],"verdict":"do not land"}'
 # The documented example is the source of truth for the review-report shape.
 example=$(awk '
-    /^```json$/ { if (inside) exit; inside=1; next }
+    /^```json$/ { inside=1; next }
+    inside && /^```$/ { exit }
     inside { print }
 ' "$tool/agents/run-kinds/review.md")
 printf '%s\n' "$example" | jq -e -L "$tool/lib" 'include "agent-review"; valid_review_report' >/dev/null

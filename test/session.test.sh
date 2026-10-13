@@ -15,7 +15,7 @@ git -C "$AGENT_JOB/work" update-ref refs/agent/base HEAD
 echo '{"id":"workspace"}' >"$AGENT_JOB/manifest.json"
 printf '%s\n' '#!/bin/sh' \
     'printf "%s" "${CLAUDE_CODE_OAUTH_TOKEN:-missing}" >"$AGENT_JOB/token-seen"' \
-    'printf "%s" "$1" >"$AGENT_JOB/seen-prompt"' \
+    'printf "%s" "$2" >"$AGENT_JOB/seen-prompt"' \
     'echo '\''{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0}'\''' >"$tmp/bin/claude"
 chmod +x "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH" CREDENTIALS_DIRECTORY="$tmp/credentials"
@@ -31,14 +31,15 @@ printf 'Run kind: work\nDo the task\n' >"$AGENT_JOB/prompts/1.md"
 "$tool/agents/session" 1
 {
     cat "$tool/agents/run-kinds/work.md"
-    printf '\nproject guidance\nRun kind: work\nDo the task\n'
+    printf '\nproject guidance\n\nRun kind: work\nDo the task\n'
 } >"$tmp/expected-prompt"
-cmp "$tmp/expected-prompt" "$AGENT_JOB/seen-prompt"
+[ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
 
 # Non-kind prompts retain the old project-prompt then task-prompt composition.
 printf 'ordinary task\n' >"$AGENT_JOB/prompts/1.md"
 "$tool/agents/session" 1
 [ "$(cat "$AGENT_JOB/seen-prompt")" = 'project guidance
+
 ordinary task' ]
 
 # A Run kind header cannot select a path outside a plain-word kind name.
