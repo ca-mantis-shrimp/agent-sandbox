@@ -15,6 +15,7 @@ git -C "$AGENT_JOB/work" update-ref refs/agent/base HEAD
 echo '{"id":"workspace"}' >"$AGENT_JOB/manifest.json"
 printf '%s\n' '#!/bin/sh' \
     'printf "%s" "${CLAUDE_CODE_OAUTH_TOKEN:-missing}" >"$AGENT_JOB/token-seen"' \
+    'printf "%s" "$2" >"$AGENT_JOB/seen-prompt"' \
     'echo '\''{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0}'\''' >"$tmp/bin/claude"
 chmod +x "$tmp/bin/claude"
 export PATH="$tmp/bin:$PATH" CREDENTIALS_DIRECTORY="$tmp/credentials"
@@ -22,6 +23,61 @@ echo credential-token >"$CREDENTIALS_DIRECTORY/agent.claude_token"
 "$tool/agents/session" 1
 [ "$(cat "$AGENT_JOB/token-seen")" = credential-token ]
 jq -e '.ok and .closing == "done"' "$AGENT_JOB/sessions/1.json" >/dev/null
+
+# A recognized kind contract comes from the agents snapshot and precedes both
+# the writable project's standing prompt and the caller's prompt.
+printf 'project guidance\n' >"$AGENT_JOB/work/.sandbox/prompt.md"
+printf 'Run kind: work\nDo the task\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+{
+    cat "$tool/agents/run-kinds/work.md"
+    printf '\nproject guidance\n\nRun kind: work\nDo the task\n'
+} >"$tmp/expected-prompt"
+[ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
+
+# The documented one-line form uses only the first plain-word token as kind.
+printf 'Run kind: review. Target: this workspace branch.\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+{
+    cat "$tool/agents/run-kinds/review.md"
+    printf '\nproject guidance\n\nRun kind: review. Target: this workspace branch.\n'
+} >"$tmp/expected-prompt"
+[ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
+
+# CR and trailing whitespace do not invalidate an otherwise plain-word kind.
+printf 'Run kind: work \r\nDo the task\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+{
+    cat "$tool/agents/run-kinds/work.md"
+    printf '\nproject guidance\n\nRun kind: work \r\nDo the task\n'
+} >"$tmp/expected-prompt"
+[ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
+
+# Non-kind prompts retain the old project-prompt then task-prompt composition.
+printf 'ordinary task\n' >"$AGENT_JOB/prompts/1.md"
+"$tool/agents/session" 1
+[ "$(cat "$AGENT_JOB/seen-prompt")" = 'project guidance
+
+ordinary task' ]
+
+# Empty, malformed and unknown kinds do not abort the session or select a path;
+# unmatched contracts produce one diagnostic and leave the prompt intact.
+for header in 'Run kind: ' 'Run kind: ../work' 'Run kind: mystery'; do
+    printf '%s\nDo the task\n' "$header" >"$AGENT_JOB/prompts/1.md"
+    "$tool/agents/session" 1 >"$tmp/no-contract.log" 2>&1
+    [ "$(grep -c '^session > no run-kind contract for ' "$tmp/no-contract.log")" = 1 ]
+    case "$header" in
+        'Run kind: mystery') expected_kind=mystery ;;
+        *) expected_kind= ;;
+    esac
+    grep -qx "session > no run-kind contract for $expected_kind" "$tmp/no-contract.log"
+    {
+        printf 'project guidance\n\n%s\nDo the task\n' "$header"
+    } >"$tmp/expected-prompt"
+    [ "$(cat "$tmp/expected-prompt")" = "$(cat "$AGENT_JOB/seen-prompt")" ]
+done
+rm "$AGENT_JOB/work/.sandbox/prompt.md"
+printf 'prompt\n' >"$AGENT_JOB/prompts/1.md"
 rm "$CREDENTIALS_DIRECTORY/agent.claude_token"
 unset CLAUDE_CODE_OAUTH_TOKEN
 "$tool/agents/session" 1

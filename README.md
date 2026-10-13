@@ -63,7 +63,7 @@ Each workspace mounts at **`/srv/job/<workspace>`** (`AGENT_JOB`), with the chec
 The target repository's own startup lives in `.sandbox/`, all optional:
 
 - `setup`: sourced before each session and the landing gate; exports tool paths and points tools directly at `/srv/cache` (for example, `CARGO_HOME=/srv/cache/cargo` and `CARGO_TARGET_DIR=/srv/cache/target`). Session output goes to `setup.log`; failure fails the session. `.sandbox/volumes` is not supported; the project chooses cache locations in `setup`, not mount declarations.
-- `prompt.md`: standing prose prepended to every session prompt.
+- `prompt.md`: standing prose prepended to every session prompt; a matching `Run kind: <kind>` contract from the trusted agents snapshot comes first. Put generic work/review/fix rules in that contract and project-specific gate commands, task systems and other project rules here.
 - `gate`: the repository's landing gate (`AGENT_LAND_GATE` can override it).
 
 A driver that turns a project's tasks into sessions belongs to that project, beside its `.sandbox/`.

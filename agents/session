@@ -83,8 +83,31 @@ if [ -f .sandbox/setup ]; then
     cd "$job/work"
 fi
 setup_sec=$(($(date +%s) - setup_started))
-if [ -f .sandbox/prompt.md ]; then
-    { cat .sandbox/prompt.md; echo; cat "$prompt"; } >/tmp/session-prompt.md
+first_line=
+IFS= read -r first_line <"$prompt" || :
+kind_contract=
+case "$first_line" in
+    'Run kind: '*)
+        kind=${first_line#Run kind: }
+        cr=$(printf '\r')
+        case "$kind" in *"$cr") kind=${kind%"$cr"} ;; esac
+        # A run kind is the first plain-word token. Anything after it is prompt
+        # text, as in the documented "Run kind: review. Target: ..." form.
+        kind=${kind%%[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*}
+        candidate="${entry%/*}/run-kinds/$kind.md"
+        if [ -f "$candidate" ]; then
+            kind_contract=$candidate
+        else
+            echo "session > no run-kind contract for $kind" >&2
+        fi
+        ;;
+esac
+if [ -n "$kind_contract" ] || [ -f .sandbox/prompt.md ]; then
+    {
+        if [ -n "$kind_contract" ]; then cat "$kind_contract"; echo; fi
+        if [ -f .sandbox/prompt.md ]; then cat .sandbox/prompt.md; echo; fi
+        cat "$prompt"
+    } >/tmp/session-prompt.md
     prompt=/tmp/session-prompt.md
 fi
 
