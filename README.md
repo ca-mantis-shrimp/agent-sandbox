@@ -79,7 +79,7 @@ Run these from the host, not inside an agent session.
 | add a session | `agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |
 | fix a review | `agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
-| record the human's or facilitator's judgment | `agent-verdict <workspace> [--by human|facilitator] [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]` |
+| record the human's or facilitator's judgment | `agent-verdict <workspace> [--by human\|facilitator] [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]` |
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
