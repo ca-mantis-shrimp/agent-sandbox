@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refuse a commit that leaves ClearHead violations (doctor exits 2; a missing
+# clearhead also refuses), then run this clone's own pre-commit, such as
+# agent-sandbox's hold guard. Enable once per clone: git config core.hooksPath .githooks
+set -u
+if git diff --cached --name-only | grep -q '^\.clearhead/'; then
+    report=$(clearhead doctor 2>&1)
+    [ $? -lt 2 ] || { printf 'pre-commit: clearhead doctor found violations:\n%s\n' "$report" >&2; exit 1; }
+fi
+local_hook="$(git rev-parse --git-common-dir)/hooks/pre-commit"
+[ ! -x "$local_hook" ] || exec "$local_hook" "$@"
