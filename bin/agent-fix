@@ -73,7 +73,7 @@ if [ -n "$review_file" ]; then
     target="review file reviews/$id.json in workspace $ws (reviewer: $reviewer)"
 fi
 prompt=$(printf '%s\n' "$review" | jq -r --arg target "$target" --arg note "$note" --argjson nits "$nits" '
-    "Run kind: fix\nTarget: \($target).\n\n" +
+    "Run kind: fix. Target: \($target).\n\n" +
     "Review verdict: \(.verdict)\n\nFindings (verbatim JSON objects):\n```json\n" +
     ([.findings[] | select(.severity == "blocking" or .severity == "should-fix" or $nits)] | tojson) +
     "\n```\n\nNote (human/orchestrator decisions and answers):\n" + $note')
