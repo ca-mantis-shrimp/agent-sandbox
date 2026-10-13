@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+# Print token usage of completed headless sessions as JSON, from the session
+# records and transcripts the runner already keeps. Read-only: no API calls, no
+# credentials, no run.env, no Git, no cost estimate.
+#
+#   agent-usage <workspace>        every session, plus an aggregate
+#   agent-usage <workspace>/<n>    that session
+#
+# Each session has status reported | partial | missing | ambiguous | incomplete
+# | unreadable. Counters are null when unknown; 0 means the
+# transcript stated zero. See lib/agent-usage.jq for the rules. Exit 0 whenever
+# JSON is printed, 1 for unknown workspace or session.
+set -eu
+
+ref=${1:?usage: agent-usage <workspace>[/<n>]}
+[ $# -eq 1 ] || { echo "usage: agent-usage <workspace>[/<n>]" >&2; exit 1; }
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-runs.sh"
+ws=$(ref_workspace "$ref")
+n=$(ref_session "$ref")
+case "$ws" in "" | . | .. | */* | -*) echo "agent-usage > bad workspace $ws" >&2; exit 1 ;; esac
+canonical() { # canonical positive decimal, at most 15 digits so jq numbers stay exact
+    case "$1" in "" | 0* | *[!0-9]* | ????????????????*) return 1 ;; esac
+}
+[ -z "$n" ] || canonical "$n" || { echo "agent-usage > bad session $n (need a canonical positive decimal)" >&2; exit 1; }
+run="$(runs_dir)/$ws"
+[ -f "$run/manifest.json" ] || { echo "agent-usage > no workspace $ws" >&2; exit 1; }
+[ -z "$n" ] || [ -f "$run/sessions/$n.json" ] || { echo "agent-usage > no session $ws/$n" >&2; exit 1; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+confined() { # <file> <name>: a regular file whose real path, symlinks resolved, is inside the run's real <name> (sessions|transcripts)
+    d=$(readlink -f -- "$run/$2") && f=$(readlink -f -- "$1") || return 1
+    [ "$d" = "$(readlink -f -- "$run")/$2" ] || return 1
+    case "$f" in "$d"/*) [ -f "$f" ] && [ -r "$f" ] ;; *) return 1 ;; esac
+}
+
+unreadable() { # <n> <reason>
+    jq -n --arg ws "$ws" --arg n "$1" --arg why "$2" '{workspace: $ws, session: ($n | tonumber), status: "unreadable",
+        reason: $why, usage: null, model_invoked: null, counters_complete: false}'
+}
+
+reduce() { # <n>: the session's JSON object, or failure
+    rec="$run/sessions/$1.json"
+    confined "$rec" sessions && jq -s -e 'length == 1 and (.[0] | type == "object")' "$rec" >/dev/null 2>&1 ||
+        return 2
+    t=$(jq -r '.transcript // empty | select(type == "string")' "$rec") || return 1
+    [ -n "$t" ] || t="transcripts/$1.jsonl"
+    case "$t" in /* | ../* | */../* | *..) t= ;; esac
+    if [ -n "$t" ] && confined "$run/$t" transcripts; then
+        jq -n -R -L "$tool/lib" --arg ws "$ws" --arg n "$1" --slurpfile rec "$rec" \
+            'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; [inputs])' <"$run/$t"
+    else
+        jq -n -L "$tool/lib" --arg ws "$ws" --arg n "$1" --slurpfile rec "$rec" \
+            'include "agent-usage"; session_usage($ws; $rec[0] + {n: $n}; null)'
+    fi
+}
+
+one() { # <n>: always one row; a failed read or reduction is an unreadable row, never an omission
+    if reduce "$1" >"$tmp/row" 2>/dev/null; then
+        jq -e 'type == "object"' "$tmp/row" >/dev/null 2>&1 || { unreadable "$1" usage_reduction_failed; return; }
+        cat "$tmp/row"
+    else
+        case $? in
+            2) unreadable "$1" record_unreadable ;;
+            *) unreadable "$1" usage_reduction_failed ;;
+        esac
+    fi
+}
+
+if [ -n "$n" ]; then
+    one "$n" >"$tmp/out"
+    cat "$tmp/out"
+    exit
+fi
+if [ -e "$run/sessions" ] || [ -L "$run/sessions" ]; then
+    sd=$(readlink -f -- "$run/sessions") && [ "$sd" = "$(readlink -f -- "$run")/sessions" ] &&
+        [ -d "$sd" ] && [ -r "$sd" ] && [ -x "$sd" ] ||
+        { echo "agent-usage > sessions of $ws cannot be enumerated" >&2; exit 1; }
+fi
+for f in "$run"/sessions/*.json; do
+    [ -f "$f" ] || [ -L "$f" ] || continue
+    b=${f##*/}
+    b=${b%.json}
+    case "$b" in "" | *[!0-9]*) continue ;; esac
+    canonical "$b" || { echo "agent-usage > non-canonical session file $b.json in $ws" >&2; exit 1; }
+    echo "$b"
+done >"$tmp/unsorted" || exit 1
+sort -n "$tmp/unsorted" >"$tmp/list"
+: >"$tmp/rows"
+while read -r s; do one "$s" >>"$tmp/rows"; done <"$tmp/list"
+jq -s -L "$tool/lib" --arg ws "$ws" 'include "agent-usage";
+    {workspace: $ws, sessions: ., aggregate: aggregate(.)}' "$tmp/rows" >"$tmp/out"
+cat "$tmp/out"
