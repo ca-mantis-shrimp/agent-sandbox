@@ -83,8 +83,28 @@ if [ -f .sandbox/setup ]; then
     cd "$job/work"
 fi
 setup_sec=$(($(date +%s) - setup_started))
-if [ -f .sandbox/prompt.md ]; then
-    { cat .sandbox/prompt.md; echo; cat "$prompt"; } >/tmp/session-prompt.md
+first_line=
+IFS= read -r first_line <"$prompt" || :
+kind_contract=
+case "$first_line" in
+    'Run kind: '*)
+        kind=${first_line#Run kind: }
+        case "$kind" in
+            '' | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*)
+                echo "session > invalid run kind: $kind" >&2
+                exit 2
+                ;;
+        esac
+        candidate="${entry%/*}/run-kinds/$kind.md"
+        [ ! -f "$candidate" ] || kind_contract=$candidate
+        ;;
+esac
+if [ -n "$kind_contract" ] || [ -f .sandbox/prompt.md ]; then
+    {
+        if [ -n "$kind_contract" ]; then cat "$kind_contract"; echo; fi
+        if [ -f .sandbox/prompt.md ]; then cat .sandbox/prompt.md; echo; fi
+        cat "$prompt"
+    } >/tmp/session-prompt.md
     prompt=/tmp/session-prompt.md
 fi
 
