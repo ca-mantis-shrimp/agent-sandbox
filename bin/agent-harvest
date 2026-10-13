@@ -9,6 +9,10 @@
 # the workspace harvested. Nothing is merged, and the workspace stays usable:
 # review the branches, add more sessions and harvest again, or land them with
 # agent-land. Refuses while a session is still running in it.
+#
+# Harvest intentionally force-replaces the host's agent/<workspace> branch. That
+# branch is written only by harvest; a divergence means the workspace history
+# was rewritten. Any replaced old tip is reported to stderr for recovery.
 set -eu
 
 id=${1:?usage: agent-harvest <id>}
@@ -60,7 +64,7 @@ repo_paths "$repo" | while IFS= read -r path; do
         new_tip=$(git -C "$repo_path" rev-parse --verify "$branch")
         if [ -n "$old_tip" ] && [ "$old_tip" != "$new_tip" ] &&
             ! git -C "$repo_path" merge-base --is-ancestor "$old_tip" "$new_tip"; then
-            printf 'agent-harvest > %s: replaced %s %s -> %s\n' "$repo_path" "$branch" "$old_tip" "$new_tip"
+            printf 'agent-harvest > %s: replaced %s %s -> %s\n' "$repo_path" "$branch" "$old_tip" "$new_tip" >&2
         fi
         rm -f "$bundle"
         printf 'agent-harvest > %s (%s commits):\n' "$path" "$(git -C "$repo/$path" rev-list --count --no-walk $commits)"
