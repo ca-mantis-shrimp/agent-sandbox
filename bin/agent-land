@@ -123,6 +123,19 @@ build_candidate() {
         git -C "$repo/$sm" symbolic-ref -q HEAD >/dev/null ||
             stop "$(name "$sm") is on a detached HEAD; switch it to its default branch first"
     done
+    # Cloning initializes submodules at the root's pins, not their branch tips.
+    for sm in $submodules; do
+        real=$(git -C "$repo/$sm" rev-parse HEAD)
+        parent=$(dirname "$sm")
+        while [ "$parent" != . ] && ! printf '%s\n' "$submodules" | grep -qxF "$parent"; do
+            parent=$(dirname "$parent")
+        done
+        path=$sm
+        [ "$parent" = . ] || path=${sm#"$parent"/}
+        pinned=$(git -C "$repo/$parent" rev-parse "HEAD:$path")
+        [ "$real" = "$pinned" ] ||
+            stop "$(name "$sm"): real branch tip $real differs from root pin $pinned; commit the submodule pointer in the root first"
+    done
     # A failed or interrupted build is disposable, unlike a completed candidate
     # retained for conflict resolution or a red gate. Mark completion last.
     if [ -d "$cand" ]; then
@@ -233,15 +246,26 @@ gate_candidate() {
     }
 }
 
-# Every real branch must still be where its candidate started, or already at
-# the candidate (a rerun after a partial advance), before any of them moves.
-advance() {
+# Use host checkpoints after recording: a gated candidate is untrusted.
+# Before recording, a retained conflict candidate still has its land-base refs.
+check_current() { # <checkpoints complete: true|false>
     for sm in . $submodules; do
         real=$(git -C "$repo/$sm" rev-parse HEAD)
-        [ "$real" = "$(git -C "$repo/$sm" rev-parse "$checkpoint/base")" ] ||
-            [ "$real" = "$(git -C "$repo/$sm" rev-parse "$checkpoint/tip")" ] ||
+        if [ "$1" = true ]; then
+            base=$(git -C "$repo/$sm" rev-parse "$checkpoint/base")
+            tip=$(git -C "$repo/$sm" rev-parse "$checkpoint/tip")
+            [ "$real" != "$tip" ] || continue
+        else
+            base=$(git -C "$cand/$sm" rev-parse refs/agent/land-base)
+        fi
+        [ "$real" = "$base" ] ||
             stop "$(name "$sm") moved since the candidate was built; nothing advanced. Remove $cand and rerun"
     done
+}
+
+# Recheck after gating too; allow repos already advanced by a partial landing.
+advance() {
+    check_current true
     advanced=""
     for sm in $submodules .; do
         tip=$(git -C "$repo/$sm" rev-parse "$checkpoint/tip")
@@ -290,6 +314,7 @@ for sm in . $submodules; do
 done
 if [ ! -d "$cand" ] || [ "$recorded" != true ]; then
     build_candidate
+    check_current false
     fetch_branch
     merge_candidate
     # Root refs are the final recording step, after every submodule's pair.
@@ -304,6 +329,7 @@ for sm in . $submodules; do
             stop "new work harvested since gating; remove $cand and rerun"
     fi
 done
+check_current true
 gate_candidate
 advance
 cleanup
