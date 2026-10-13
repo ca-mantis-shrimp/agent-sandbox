@@ -27,7 +27,7 @@ it separately as root:
 
 ```sh
 agent-host-build                       # default output: ./agent-sandbox.raw
-sudo agent-host-install ./agent-sandbox.raw
+agent-host-install ./agent-sandbox.raw # run as root (using the host's chosen tool)
 ```
 
 `agent-host-build [<out.raw>]` archives **committed `system/` at HEAD**, ignoring
@@ -35,14 +35,16 @@ working-tree edits. The output basename must be `agent-sandbox.raw` to match its
 extension-release name. Building needs `unshare` and `systemd-repart`; repart
 definitions come from `AGENT_REPART_DEFINITIONS` when set, otherwise mkosi's
 installed resources (the same lookup as `agent-layer`). The unsigned image carries
-`ID=_any`, `AGENT_SANDBOX_COMMIT` and `AGENT_SANDBOX_SYSTEM_TREE` provenance fields.
+`ID=_any`, `EXTENSION_RELOAD_MANAGER=1`, and `AGENT_SANDBOX_COMMIT` and
+`AGENT_SANDBOX_SYSTEM_TREE` provenance fields.
 Only build and install a trusted revision: this extension configures host authority.
 
-`agent-host-install` atomically copies the image to
-`/var/lib/extensions/agent-sandbox.raw`, runs `systemd-sysext refresh` (including
-manager reload), then applies only the sandbox's sysusers and tmpfiles configs.
-It refuses an existing `agent-sandbox` directory extension, naming it rather than
-deleting it. The host declares persistence/merging of this extension at boot
+`agent-host-install` stages the image in `/var/lib/extensions/`, validates it with
+`systemd-dissect --validate`, and atomically replaces `agent-sandbox.raw` only on
+success. It runs `systemd-sysext refresh` (including manager reload), then applies
+only the sandbox's sysusers and tmpfiles configs. It refuses any other
+`agent-sandbox*` directory or `.raw` extension in `/etc/extensions`,
+`/run/extensions` or `/var/lib/extensions`, naming it rather than deleting it. The host declares persistence/merging of this extension at boot
 (for example, enabling `systemd-sysext.service`); the installer does not enable units.
 On a pin move, build and install again. `agent-doctor` compares the merged
 extension's `system/` tree id with the tool checkout's HEAD, so unrelated commits

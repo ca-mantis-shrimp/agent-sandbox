@@ -5,16 +5,27 @@ die() { echo "agent-host-install > $*" >&2; exit 1; }
 [ $# -eq 1 ] || die 'usage: agent-host-install <agent-sandbox.raw>'
 [ "$(id -u)" -eq 0 ] || die 'run as root'
 [ -f "$1" ] && [ "$(basename -- "$1")" = agent-sandbox.raw ] || die 'expected an agent-sandbox.raw file'
-# Override for fixture tests; live hosts use /var/lib/extensions.
+# Overrides for fixture tests; check every sysext search directory.
 extensions=${AGENT_EXTENSIONS:-/var/lib/extensions}
-[ ! -d "$extensions/agent-sandbox" ] || die "directory extension present: $extensions/agent-sandbox (remove or relocate it explicitly)"
-# A volatile directory extension also conflicts with this image.
-[ ! -d /run/extensions/agent-sandbox ] || die 'directory extension present: /run/extensions/agent-sandbox'
+for dir in "${AGENT_ETC_EXTENSIONS:-/etc/extensions}" "${AGENT_RUN_EXTENSIONS:-/run/extensions}" "$extensions"; do
+    for entry in "$dir"/agent-sandbox*; do
+        [ "$entry" != "$extensions/agent-sandbox.raw" ] || continue
+        if [ -d "$entry" ]; then
+            die "conflicting extension: $entry (remove or relocate it explicitly)"
+        fi
+        case "$entry" in
+            *.raw) if [ -e "$entry" ] || [ -L "$entry" ]; then
+                die "conflicting extension: $entry (remove or relocate it explicitly)"
+            fi ;;
+        esac
+    done
+done
 mkdir -p "$extensions"
 stage=$(mktemp "$extensions/.agent-sandbox.XXXXXX")
 trap 'rm -f "$stage"' EXIT
 cp "$1" "$stage"
 chmod 0644 "$stage"
+systemd-dissect --validate "$stage" || die 'staged image validation failed; installed image unchanged'
 mv -f "$stage" "$extensions/agent-sandbox.raw"
 systemd-sysext refresh
 systemd-sysusers /usr/lib/sysusers.d/agent-sandbox.conf
