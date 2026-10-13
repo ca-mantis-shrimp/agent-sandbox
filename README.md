@@ -79,7 +79,7 @@ Run these from the host, not inside an agent session.
 | add a session | `agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |
 | fix a review | `agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
-| record the human's judgment | `agent-verdict <workspace> [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]` |
+| record the human's or facilitator's judgment | `agent-verdict <workspace> [--by human\|facilitator] [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]` |
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
@@ -166,7 +166,7 @@ commit or merge conflict is preferable to a garbled action line.
 5. Check fixes. A fix does not reconcile a finding; the human records reconciliation after checking it. Reviews advise landing, not gate it.
 6. Run `agent-harvest <workspace>` when no session is running; it fetches branches in each repo and shows commits and closing messages without merging. Harvest again after further sessions.
 7. Run `agent-land <workspace>`. Before merging, it checks the harvested branch's `Tests:` file locks in every repository (see below). It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
-8. Record the human's landing judgment with `agent-verdict`; then push separately.
+8. Record the human's or facilitator's landing judgment with `agent-verdict`; then push separately.
 
 A commit whose subject starts exactly with `Tests:` locks every file it touches against later non-`Tests:` commits on that branch. Landing checks commits since the branch diverged from the real checkout using only Git, with no model call. A later `Tests:` commit may change locked files or lock additional files; it does not forgive an earlier violation. Other commits may change unlocked files. “Later” means a descendant in Git history, not a newer timestamp; deletions and renames count as changes, and merge commits are checked against each parent. Even editing and then restoring a locked file is refused. The refusal names the repository, files, locking commits and violating commits, before any candidate merge or gate. There is no override: repair the branch history and harvest again before retrying.
 
