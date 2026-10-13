@@ -117,6 +117,11 @@ cp "$run/exports/1/sm-sub.bundle" "$run/exports/2/sm-sub.bundle"
 # A repaired workspace history replaces the host harvest branch and reports
 # both tips instead of silently refusing a non-fast-forward fetch.
 old_tip=$(git -C "$repo" rev-parse agent/safe)
+# The workspace was poisoned above to prove host commands ignore its config;
+# synthetic commits for this scenario must not execute that poison themselves.
+rm -rf "$run/work/.git/hooks"
+git -C "$run/work" config --unset-all core.fsmonitor || :
+git -C "$run/work" config --unset-all core.pager || :
 git -C "$run/work" reset -q --hard refs/agent/base
 printf rewrite >"$run/work/rewrite"
 git -C "$run/work" add rewrite
