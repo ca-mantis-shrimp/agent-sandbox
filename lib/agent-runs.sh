@@ -120,16 +120,21 @@ workspace_json() { # <workspace-dir>
         done
         if [ "$#" -eq 0 ]; then printf '[]\n'; else jq -s '.' "$@"; fi
     )
-    workspace=$(jq -s --argjson reviews "$reviews" '.[0] as $m
+    # Records travel through pipes, not arguments: Linux caps one argument at 128 KiB.
+    workspace=$({ printf '%s\n' "$reviews"; jq -s '.' "$@"; } | jq -s '.[0] as $reviews | .[1]
+        | .[0] as $m
         | (($m.sessions // []) + (.[1:] | sort_by(.n))) as $sessions
         | [$sessions[] | .state // empty] as $states
         | $m + {sessions: $sessions, reviews: (($m.reviews // []) + $reviews),
                 state: (if ($states | any(. == "running")) then "running"
                         elif ($states | length) > 0 then $states[-1]
-                        else $m.state end)}' "$@")
-    printf '%s\n' "$workspace" | jq -c '.sessions[]?' | while IFS= read -r session; do
-        session_json "$dir" "$session"
-    done | jq -s --argjson workspace "$workspace" '$workspace + {sessions: .}'
+                        else $m.state end)}')
+    {
+        printf '%s\n' "$workspace"
+        printf '%s\n' "$workspace" | jq -c '.sessions[]?' | while IFS= read -r session; do
+            session_json "$dir" "$session"
+        done | jq -s '.'
+    } | jq -s '.[0] + {sessions: .[1]}'
 }
 
 # Advisory after a successful landing. Accept the already-loaded workspace;
