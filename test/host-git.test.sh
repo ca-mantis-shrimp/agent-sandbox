@@ -82,6 +82,12 @@ done
 echo '{"n":1,"state":"finished","read_only":false}' >"$run/sessions/1.json"
 AGENT_JOB="$run" AGENT_HARNESS=claude sh "$tool/agents/session" 1 --export
 "$POISON" "$run/work" "$run/work/sub"
+# A commit map over 128 KiB (Linux's cap on one argument) still reads.
+cp "$run/exports/1.json" "$tmp/export.json"
+jq --arg sha "$(git -C "$repo" rev-parse HEAD)" 'map_values(.base = [range(2000) | $sha])' \
+    "$tmp/export.json" >"$run/exports/1.json"
+[ "$("$tool/bin/agent-result" safe | jq '[.commits[] | length] | add')" -eq 4000 ]
+cp "$tmp/export.json" "$run/exports/1.json"
 "$tool/bin/agent-run" --in safe --prompt test >/dev/null
 "$tool/bin/agent-result" safe >/dev/null
 "$tool/bin/agent-reconcile" safe >/dev/null
