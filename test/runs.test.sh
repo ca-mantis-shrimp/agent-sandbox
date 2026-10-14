@@ -56,6 +56,19 @@ echo '{"id": "old", "state": "finished", "model": "m", "sessions": [{"action": "
 [ "$(workspace_json "$old" | jq -c '[.state, .sessions[0].outcome, (.sessions | length)]')" = '["finished","completed",1]' ]
 [ -z "$(running_sessions "$old")" ]
 
+# --- records larger than one argument (Linux caps each at 128 KiB) still read -
+# 2026-10-14: a six-session workspace failed with "Argument list too long".
+
+big="$tmp/big"
+mkdir -p "$big/sessions" "$big/reviews"
+echo '{"id": "big", "state": "ready"}' >"$big/manifest.json"
+pad=$(head -c 150000 /dev/zero | tr '\0' x)
+for n in 1 2; do
+    printf '{"n": %s, "state": "finished", "pad": "%s"}\n' "$n" "$pad" >"$big/sessions/$n.json"
+done
+printf '{"verdict": "land", "pad": "%s"}\n' "$pad" >"$big/reviews/r.json"
+[ "$(workspace_json "$big" | jq -c '[.state, (.sessions | length), (.reviews | length)]')" = '["finished",2,1]' ]
+
 # --- repo_commits lists each repo's commits since a ref ----------------------
 
 repo="$tmp/repo"
