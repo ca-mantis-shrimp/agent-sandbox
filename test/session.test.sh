@@ -168,7 +168,7 @@ printf '%s\n' '#!/bin/sh' \
     'esac' \
     "exec $real_git \"\$@\"" >"$tmp/bin/git"
 printf '%s\n' '#!/bin/sh' \
-    'if [ "${HEAD_FAILURE:-}" = jq ] && [ "$1" = -s ] && [ "${2:-}" = add ]; then exit 1; fi' \
+    'if [ "${HEAD_FAILURE:-}" = jq ] && [ "$1" = -Rn ]; then exit 1; fi' \
     "exec $real_jq \"\$@\"" >"$tmp/bin/jq"
 chmod +x "$tmp/bin/git" "$tmp/bin/jq"
 for failure in git submodule invalid jq; do
