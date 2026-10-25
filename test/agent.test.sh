@@ -20,9 +20,9 @@ printf '<two words>\n<a * literal>\n' | cmp - "$tmp/out"
 "$tool/bin/agent" >"$tmp/help"
 for script in "$tool"/bin/agent-*; do
     [ -f "$script" ] || continue
-    name=${script##*/}
+    name=${script##*/agent-}
     summary=$(sed -n '2s/^# //p' "$script")
-    [ -n "$summary" ] || { echo "agent.test > empty summary in $name" >&2; exit 1; }
+    [ -n "$summary" ] || { echo "agent.test > empty summary in $script" >&2; exit 1; }
     awk -F '\t' -v name="$name" '
         $1 == name && NF > 1 && $2 != "" { found=1 }
         END { exit !found }
@@ -46,6 +46,14 @@ if [ -e "$AGENT_TEST_RAN" ]; then
     echo 'agent.test > help ran the command' >&2; exit 1
 fi
 
+# Global help aliases and extra help words show help rather than an error.
+"$tmp/bin/agent" --help >"$tmp/out"
+grep -qF 'Commands (use: agent <command>):' "$tmp/out"
+"$tmp/bin/agent" -h >"$tmp/out"
+grep -qF 'Commands (use: agent <command>):' "$tmp/out"
+"$tmp/bin/agent" help safe extra >"$tmp/out"
+grep -qF 'Commands (use: agent <command>):' "$tmp/out"
+
 # Unknown commands are usage errors and include the available command list.
 if "$tmp/bin/agent" not-a-command >"$tmp/out" 2>"$tmp/err"; then
     echo 'agent.test > unknown command unexpectedly succeeded' >&2; exit 1
@@ -53,24 +61,64 @@ else
     status=$?
 fi
 [ "$status" -eq 2 ]
-grep -qF 'agent-echo' "$tmp/out"
+grep -qF 'echo' "$tmp/out"
+if grep -qF 'agent-echo' "$tmp/out"; then
+    echo 'agent.test > help retained agent- prefix' >&2; exit 1
+fi
 grep -qF 'unknown command' "$tmp/err"
 
-# The agent completion delegates `agent verdict` to the existing verdict logic.
-mkdir -p "$tmp/completion-bin"
-cat >"$tmp/completion-bin/agent-verdict" <<'SCRIPT'
-#!/bin/sh
-printf '20261025-000001\tproject\tlabel\n20261025-000002\tproject\tlabel\n'
-SCRIPT
-chmod +x "$tmp/completion-bin/agent-verdict"
+# Completion uses commands on PATH even when read through a symlink elsewhere.
+mkdir -p "$tmp/completion-bin-a" "$tmp/completion-bin-b" "$tmp/completions"
+for dir in "$tmp/completion-bin-a" "$tmp/completion-bin-b"; do
+    for name in agent agent-echo agent-verdict; do
+        printf '#!/bin/sh\nexit 0\n' >"$dir/$name"
+        chmod +x "$dir/$name"
+    done
+done
+ln -s "$tool/system/usr/share/bash-completion/completions/agent" "$tmp/completions/agent"
+bash -c '
+    PATH="$1:$2:$PATH"
+    . "$3"
+    COMP_WORDS=(agent ec)
+    COMP_CWORD=1
+    _agent
+    printf "%s\n" "${COMPREPLY[@]}"
+' _ "$tmp/completion-bin-a" "$tmp/completion-bin-b" "$tmp/completions/agent" >"$tmp/out"
+printf 'echo\n' | cmp - "$tmp/out"
+
+# Verdict loading first uses bash-completion's lazy loader through that symlink.
 bash -c '
     PATH="$1:$PATH"
+    _completion_loader() {
+        [ "$1" = agent-verdict ] || return 1
+        loaded=yes
+        _agent_verdict() { COMPREPLY=(20261025-000001 20261025-000002); }
+    }
     . "$2"
     COMP_WORDS=(agent verdict 20261025-00000)
     COMP_CWORD=2
     _agent
+    [ "$loaded" = yes ]
     printf "%s\n" "${COMPREPLY[@]}"
-' _ "$tmp/completion-bin" "$tool/system/usr/share/bash-completion/completions/agent" >"$tmp/out"
+' _ "$tmp/completion-bin-a" "$tmp/completions/agent" >"$tmp/out"
 printf '20261025-000001\n20261025-000002\n' | cmp - "$tmp/out"
+
+# If lazy loading fails, resolve the completion symlink before finding its sibling.
+mkdir -p "$tmp/real-completions" "$tmp/other-completions"
+cp "$tool/system/usr/share/bash-completion/completions/agent" "$tmp/real-completions/agent"
+cat >"$tmp/real-completions/agent-verdict" <<'SCRIPT'
+_agent_verdict() { COMPREPLY=(fallback-loaded); }
+SCRIPT
+ln -s "$tmp/real-completions/agent" "$tmp/other-completions/agent"
+bash -c '
+    PATH="$1:$PATH"
+    _completion_loader() { return 1; }
+    . "$2"
+    COMP_WORDS=(agent verdict x)
+    COMP_CWORD=2
+    _agent
+    printf "%s\n" "${COMPREPLY[@]}"
+' _ "$tmp/completion-bin-a" "$tmp/other-completions/agent" >"$tmp/out"
+printf 'fallback-loaded\n' | cmp - "$tmp/out"
 
 echo 'agent.test > ok'
