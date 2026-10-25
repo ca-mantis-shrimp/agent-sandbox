@@ -388,7 +388,7 @@ for note_ref in review verdict; do
         push_refs="$push_refs refs/notes/$note_ref"
     fi
 done
-say "landed $branch; push when ready: git push origin $branch"
+say "landed $branch; push when ready"
 [ -z "$push_refs" ] || say "then push its notes: git push origin$push_refs"
 human_verdict_reminder "$id" "$workspace" ||
     say "warning: could not display the human verdict reminder"
