@@ -141,4 +141,12 @@ printf '20261002-000000\tplatform\t\n20261001-000000\tsrr\tpayment-boundary\n' |
 # Nothing pending prints nothing and succeeds.
 AGENT_RUNS="$tmp/empty-runs" sh "$verdict" --pending >"$tmp/pending"
 [ ! -s "$tmp/pending" ]
-echo 'agent-verdict.test > ok' 
+# Bash completion offers the pending ids first, then flags.
+if command -v bash >/dev/null; then
+    out=$(PATH="$tool/bin:$PATH" AGENT_RUNS=$pend bash -c '
+        . "$1"; COMP_WORDS=(agent-verdict 2026); COMP_CWORD=1; _agent_verdict; printf "%s\n" "${COMPREPLY[@]}"
+        COMP_WORDS=(agent-verdict 20261001-000000 --a); COMP_CWORD=2; _agent_verdict; printf "%s\n" "${COMPREPLY[@]}"
+    ' _ "$tool/system/usr/share/bash-completion/completions/agent-verdict")
+    [ "$out" = "$(printf '20261002-000000\n20261001-000000\n--agree')" ]
+fi
+echo 'agent-verdict.test > ok'
