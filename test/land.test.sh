@@ -544,7 +544,7 @@ commit "$notesroot" change reviewed
 reviewed_tip=$(head_of "$notesroot")
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/with-review"
-jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
+jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$reviewed_tip" '{repo:$repo, base:$base, sessions:[
     {n:1,read_only:false,closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
     {n:2,read_only:true,head_at_start:{".":$tip},model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
         {severity:"nit",file:"old",line:4,what:"Old review",why:"Not newest."}],coverage:[],for_human:[]}},
@@ -584,7 +584,7 @@ commit "$notesroot" bug repaired
 after_fix=$(head_of "$notesroot")
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/fixed-review"
-jq -n --arg repo "$notesroot" --arg before "$before_fix" --arg after "$after_fix" '{repo:$repo,sessions:[
+jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg before "$before_fix" --arg after "$after_fix" '{repo:$repo,base:$base,sessions:[
  {n:1,read_only:true,model:"reviewer",head_at_start:{".":$before},review:{verdict:"land after fixes",coverage:[],for_human:[],findings:[{file:"bug",line:1,severity:"blocking",what:"Repair bug",why:"Fails"}]}},
  {n:2,read_only:false,review_session:"1",commits:{".":[$after]},closing:"```json\n{\"fixed\":[\"1#1\"],\"declined\":[]}\n```"}
 ]}' >"$AGENT_RUNS/fixed-review/manifest.json"
@@ -621,7 +621,7 @@ git -C "$notesroot" switch -q -c agent/note-failure
 commit "$notesroot" plain "note failure"
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/note-failure"
-jq -n --arg repo "$notesroot" --arg tip "$(git -C "$notesroot" rev-parse agent/note-failure)" '{repo:$repo,sessions:[
+jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$(git -C "$notesroot" rev-parse agent/note-failure)" '{repo:$repo,base:$base,sessions:[
     {n:1,read_only:true,head_at_start:{".":$tip},model:"reviewer",started:"2026-10-25T11:00:00Z",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
 ]}' >"$AGENT_RUNS/note-failure/manifest.json"
 if (cd "$notesroot" && NOTE_FAIL=true "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1; then :; else
@@ -649,16 +649,21 @@ commit "$pinroot/sub" state after
 git -C "$pinroot/sub" switch -q main
 mkdir -p "$AGENT_RUNS/pin-only"
 pin_reviewed=$(head_of "$pinroot")
-jq -n --arg repo "$pinroot" --arg tip "$pin_reviewed" '{repo:$repo,sessions:[
+jq -n --arg repo "$pinroot" --arg tip "$pin_reviewed" '{repo:$repo,base:$tip,sessions:[
     {n:1,read_only:false,closing:"Updated the pinned dependency.\n\nMore detail."},
     {n:2,read_only:true,head_at_start:{".":$tip},model:"pin-reviewer",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
 ]}' >"$AGENT_RUNS/pin-only/manifest.json"
 (cd "$pinroot" && "$tool/bin/agent-land" pin-only) >"$tmp/land.log" 2>&1
 pin_commit=$(head_of "$pinroot")
 [ "$(git -C "$pinroot" rev-list --parents -n1 "$pin_commit" | wc -w)" -eq 2 ]
-git -C "$pinroot" notes --ref=review show "$pin_reviewed" | grep -Fqx '# review: land by pin-reviewer (pin-only/2)'
+# The unchanged root at review start is the workspace base, not its work.
+if git -C "$pinroot" notes --ref=review show "$pin_reviewed" 2>/dev/null; then exit 1; fi
 pin_message=$(git -C "$pinroot/sub" show -s --format=%B HEAD)
 printf '%s\n' "$pin_message" | grep -Fqx 'Updated the pinned dependency.'
 printf '%s\n' "$pin_message" | grep -Fqx 'Agent-Workspace: pin-only'
 
+# Missing manifests have the normal diagnostic, never an unguarded jq error.
+mkdir -p "$AGENT_RUNS/no-manifest"
+if "$tool/bin/agent-land" no-manifest >"$tmp/missing.log" 2>&1; then exit 1; fi
+if grep -Fq 'jq: error: Could not open file' "$tmp/missing.log"; then exit 1; fi
 echo "agent-land.test > ok"
