@@ -457,6 +457,42 @@ git -C "$root" switch -q main
 land lock-prefix
 [ "$(cat "$root/ordinary")" = changed ]
 
+# Conventional test subjects lock files, with exact subject prefixes.
+locked_workspace lock-conventional
+commit "$root" 'test assertions' original
+git -C "$root" commit -q --amend -m 'test: original assertions'
+locked=$(head_of "$root")
+commit "$root" 'test assertions' weakened
+changed=$(head_of "$root")
+git -C "$root" switch -q main
+fails land lock-conventional
+grep -Fq "Tests: lock violated: test assertions; locked by $locked; changed by $changed (test assertions: weakened)" "$tmp/land.log"
+if [ -e "$AGENT_RUNS/land-lock-conventional/work" ]; then exit 1; fi
+
+locked_workspace lock-conventional-scope
+commit "$root" 'scoped assertions' original
+git -C "$root" commit -q --amend -m 'test(land): original assertions'
+locked=$(head_of "$root")
+commit "$root" 'scoped assertions' weakened
+changed=$(head_of "$root")
+git -C "$root" switch -q main
+fails land lock-conventional-scope
+grep -Fq "Tests: lock violated: scoped assertions; locked by $locked; changed by $changed (scoped assertions: weakened)" "$tmp/land.log"
+if [ -e "$AGENT_RUNS/land-lock-conventional-scope/work" ]; then exit 1; fi
+
+# Plural and longer words are not conventional test prefixes.
+locked_workspace lock-nonconventional
+commit "$root" 'plural assertions' original
+git -C "$root" commit -q --amend -m 'tests: original assertions'
+commit "$root" 'longer assertions' original
+git -C "$root" commit -q --amend -m 'testing: original assertions'
+commit "$root" 'plural assertions' changed
+commit "$root" 'longer assertions' changed
+git -C "$root" switch -q main
+land lock-nonconventional
+[ "$(cat "$root/plural assertions")" = changed ]
+[ "$(cat "$root/longer assertions")" = changed ]
+
 # --- review and verdict notes travel with landed commits ----------------------
 
 notesroot="$tmp/notes-root"
