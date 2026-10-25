@@ -123,11 +123,45 @@ review_finding_trailers "$tmp/repo" "$ws" | grep -Fq 'Finding-Fixed: 1#1'
 git -C "$tmp/repo" checkout -q agent/subws
 git -C "$tmp/repo" add sub
 git -C "$tmp/repo" commit -qm 'pin changed sub'
+# Another workspace landed after our base, in both root and submodule.
+git -C "$tmp/repo/sub" checkout -q --detach "$subbase"
+git -C "$tmp/repo/sub" commit -q --allow-empty -m 'foreign sub work'
+subforeign=$(git -C "$tmp/repo/sub" rev-parse HEAD)
+git -C "$tmp/repo" checkout -q --detach "$foreign"
+git -C "$tmp/repo" add sub
+git -C "$tmp/repo" commit -qm 'pin foreign sub work'
+hosttip=$(git -C "$tmp/repo" rev-parse HEAD)
+git -C "$tmp/repo/sub" merge -q --no-ff agent/subws -m 'land sub work'
+git -C "$tmp/repo" merge -q --no-ff --no-commit agent/subws || :
+git -C "$tmp/repo" add sub
+git -C "$tmp/repo" commit -qm 'land workspace'
 landed=$(git -C "$tmp/repo" rev-parse HEAD)
+[ "$(git -C "$tmp/repo" rev-parse HEAD^1)" = "$hosttip" ]
 git -C "$tmp/repo" checkout -q --detach
 git -C "$tmp/repo" branch -D agent/subws >/dev/null
 git -C "$tmp/repo/sub" branch -D agent/subws >/dev/null
 subws=$(printf '%s\n' "$subws" | jq --arg landed "$landed" '.landed_commit=$landed | .sessions[0].n=10')
 write_review_thread "$tmp/repo" "$subws"
 git -C "$tmp/repo/sub" notes --ref=review show "$subwork" | grep -Fq 'subws/10'
+# Neither main's post-base commits nor another workspace's submodule commits
+# become valid on landing or retry; genuine merged-side anchors remain valid.
+for pair in ". $foreign" "sub $subforeign"; do
+ set -- $pair
+ forgedws=$(printf '%s\n' "$subws" | jq --arg path "$1" --arg sha "$2" '
+  .sessions[0].n=11 | .sessions[0].head_at_start={($path):$sha} |
+  .sessions += [{n:12,commits:{($path):[$sha]},closing:"```json\n{\"fixed\":[\"11#1\"],\"declined\":[]}\n```"}]')
+ write_review_thread "$tmp/repo" "$forgedws" 2>"$tmp/rejected"
+ grep -Fq "$2" "$tmp/rejected"
+ if git -C "$tmp/repo/$1" notes --ref=review show "$2" 2>/dev/null; then exit 1; fi
+ if review_finding_trailers "$tmp/repo" "$forgedws" | grep -q Finding-Fixed; then exit 1; fi
+done
+validws=$(printf '%s\n' "$subws" | jq --arg sub "$subwork" '.sessions += [
+ {n:11,commits:{sub:[$sub]},closing:"```json\n{\"fixed\":[\"10#1\"],\"declined\":[]}\n```"}]')
+review_finding_trailers "$tmp/repo" "$validws" | grep -Fq 'Finding-Fixed: 10#1'
+# A branch-added submodule has no base: do not claim its entire history.
+# Multiple rows produce a single missing-base warning, not one per row.
+added=$(printf '%s\n' "$subws" | jq --arg base "$origin" '
+ .base=$base | .sessions=[.sessions[0], (.sessions[0] | .n=20)]')
+write_review_thread "$tmp/repo" "$added" 2>"$tmp/rejected"
+[ "$(grep -c 'missing workspace base.*sub' "$tmp/rejected")" -eq 1 ]
 echo 'review thread tests passed'
