@@ -1,8 +1,5 @@
 #!/bin/sh
-#
-# Create a workspace for sandboxed agent sessions: a disposable clone of the
-# repository you run it in, which any number of sessions, from any harness,
-# can then work in.
+# Create a disposable agent workspace for this repository.
 #
 #   agent-new      prints the workspace id on stdout; progress on stderr
 #

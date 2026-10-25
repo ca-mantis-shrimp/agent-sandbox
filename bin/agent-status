@@ -1,4 +1,5 @@
 #!/bin/sh
+# Show workspace, session and host-hold status.
 #
 # On-demand summary of agent workspaces, read from their records, transcripts
 # and each workspace's system-manager unit.

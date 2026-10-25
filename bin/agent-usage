@@ -1,4 +1,5 @@
 #!/bin/sh
+# Summarize token usage from completed session records and transcripts.
 #
 # Print token usage of completed headless sessions as JSON, from the session
 # records and transcripts the runner already keeps. Read-only: no API calls, no

@@ -1,6 +1,7 @@
 #!/bin/sh
-# Start one session on agent@<workspace>.service. One session at a time,
-# including readers. Prints <workspace>/<n>; --wait waits for its result.
+# Start one sandboxed session in a workspace.
+# One session at a time, including readers. Prints <workspace>/<n>; --wait waits
+# for its result.
 # Host base and prebuilt layers are declared by AGENT_BASE and AGENT_LAYERS.
 set -eu
 umask 002

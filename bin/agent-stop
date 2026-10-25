@@ -1,4 +1,5 @@
 #!/bin/sh
+# Gracefully stop one or all sessions in a workspace.
 #
 # Ask running sessions to stop early and gracefully (SIGTERM, then SIGKILL
 # after the unit's TimeoutStopSec).

@@ -1,4 +1,5 @@
 #!/bin/sh
+# Read the manifest and session results of a workspace.
 #
 # Print a workspace or one of its sessions as JSON: the contract every caller
 # reads, whichever harness it is.
