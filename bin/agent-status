@@ -42,7 +42,7 @@ row() { # <workspace-dir>
     dir=$1
     id=$(basename "$dir")
     m=$(workspace_json "$dir")
-    state=$(printf '%s' "$m" | jq -r .state)
+    state=$(printf '%s' "$m" | jq -r 'if .retired then "retired" else .state end')
     latest=$(latest_transcript "$dir")
     events=0
     idle=-
@@ -50,7 +50,7 @@ row() { # <workspace-dir>
         events=$(cat "$dir"/transcripts/*.jsonl | wc -l)
         idle=$((now - $(stat -c %Y "$latest")))
     fi
-    flag=$(printf '%s' "$m" | jq -r 'if .landed then "landed" elif .harvested then "harvested" else "" end')
+    flag=$(printf '%s' "$m" | jq -r 'if .retired then "retired" elif .landed then "landed" elif .harvested then "harvested" else "" end')
     if [ "$state" = running ]; then
         # The record says a session is running; the unit says whether it is.
         active=0
@@ -110,5 +110,7 @@ if [ $# -gt 0 ]; then
 fi
 
 for dir in "$runs"/*/; do
-    if [ -f "$dir/manifest.json" ]; then row "${dir%/}"; fi
+    if [ -f "$dir/manifest.json" ] && ! jq -e '.retired != null' "$dir/manifest.json" >/dev/null; then
+        row "${dir%/}"
+    fi
 done

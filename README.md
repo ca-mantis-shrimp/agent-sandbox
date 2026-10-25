@@ -101,7 +101,7 @@ A driver that turns a project's tasks into sessions belongs to that project, bes
 
 ## Commands
 
-Run these from the host, not inside an agent session.
+Run these from the host, not inside an agent session. The unfiltered `agent-status` listing omits retired workspaces; their records and transcripts remain on disk, and `agent-status <workspace>` can still show a retired workspace's state.
 
 | To | Command |
 | --- | --- |
@@ -114,6 +114,7 @@ Run these from the host, not inside an agent session.
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
+| discard a workspace with no commits | `agent-retire <workspace>` |
 | read completed-session token usage as JSON | `agent-usage <workspace>[/<n>]` |
 | see workspaces or recent tool calls | `agent-status [<workspace> [n]]` |
 | check whether a repository is held | `agent-status --held <repo-path>` |

@@ -1,0 +1,81 @@
+#!/bin/sh
+# Discard an empty/failed workspace while retaining its session evidence.
+#
+#   agent-retire <workspace>
+set -eu
+umask 002
+
+id=${1:?usage: agent-retire <workspace>}
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-runs.sh"
+. "$tool/lib/agent-systemd.sh"
+runs=$(runs_dir)
+run="$runs/$id"
+gate_ws="land-$id"
+gate_run="$runs/$gate_ws"
+unit=$(agent_unit "$id")
+gate_unit=$(agent_unit "$gate_ws")
+[ -f "$run/manifest.json" ] || { echo "agent-retire > no workspace at $run" >&2; exit 1; }
+jq -e '.retired == null and .landed == null' "$run/manifest.json" >/dev/null || {
+    echo "agent-retire > workspace is already retired or landed: $id" >&2
+    exit 1
+}
+
+# Match agent-land's lock order: workspace first, then candidate gate workspace.
+lock=$(agent_lock_path "$id")
+gate_lock=$(agent_lock_path "$gate_ws")
+exec 9>"$lock"
+flock 9
+exec 8>"$gate_lock"
+flock 8
+agent_unit_active "$id" && { echo "agent-retire > session still active in $id" >&2; exit 1; }
+agent_unit_active "$gate_ws" && { echo "agent-retire > candidate gate still active for $id" >&2; exit 1; }
+if ! live_sessions=$(running_sessions "$run"); then
+    echo "agent-retire > cannot read session records in $id; refusing to discard it" >&2
+    exit 1
+fi
+[ -z "$live_sessions" ] || {
+    echo "agent-retire > session record still running in $id; reconcile it first" >&2
+    exit 1
+}
+
+repo=$(workspace_repo "$run")
+[ -d "$run/work" ] || { echo "agent-retire > workspace clone is missing: $run/work" >&2; exit 1; }
+paths=$(repo_paths "$repo")
+while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    dir="$run/work/$path"
+    base=refs/agent/base
+    if ! git -C "$dir" rev-parse -q --verify "$base" >/dev/null 2>&1; then
+        echo "agent-retire > $path has no $base; refusing to discard unknown work" >&2
+        exit 1
+    fi
+    if ! git -C "$dir" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+        echo "agent-retire > cannot read HEAD in $path" >&2
+        exit 1
+    fi
+    if ! git -C "$dir" merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
+        echo "agent-retire > $path HEAD is not descended from $base; refusing to discard unknown work" >&2
+        exit 1
+    fi
+    if [ -n "$(git -C "$dir" rev-list "$base..HEAD")" ]; then
+        echo "agent-retire > $path has commits beyond $base; land or harvest the work first" >&2
+        exit 1
+    fi
+    if ! dirty=$(git -C "$dir" status --porcelain --untracked-files=all --ignore-submodules=all); then
+        echo "agent-retire > cannot inspect working tree in $path; refusing to discard unknown work" >&2
+        exit 1
+    fi
+    if [ -n "$dirty" ]; then
+        echo "agent-retire > $path has uncommitted or untracked changes; refusing to discard unknown work" >&2
+        exit 1
+    fi
+done <<EOF
+$paths
+EOF
+
+jq --arg at "$(date -Iseconds)" '.retired = $at | .state = "retired"' \
+    "$run/manifest.json" >"$run/manifest.tmp"
+mv "$run/manifest.tmp" "$run/manifest.json"
+rm -rf "$run/work" "$gate_run"
+echo "agent-retire > retired $id; session records and transcripts retained" >&2
