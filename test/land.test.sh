@@ -493,7 +493,8 @@ message=$(git -C "$notesroot" show -s --format=%B "$root_merge")
 printf '%s\n' "$message" | grep -Fqx 'Implemented the reviewed change.'
 printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
 ! printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'
-grep -q 'landed agent/with-review; push when ready: git push origin agent/with-review$' "$tmp/land.log"
+grep -Fqx 'agent-land > landed agent/with-review; push when ready' "$tmp/land.log"
+! grep -Fq 'git push origin agent/' "$tmp/land.log"
 grep -q 'agent-land > then push its notes: git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
 
 # A landed change without a parsed review must not get an empty review note.
@@ -511,7 +512,8 @@ if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1;
     echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
 fi
 grep -q 'no parsed review; no review note written' "$tmp/land.log"
-grep -q 'landed agent/no-review; push when ready: git push origin agent/no-review$' "$tmp/land.log"
+grep -Fqx 'agent-land > landed agent/no-review; push when ready' "$tmp/land.log"
+! grep -Fq 'git push origin agent/' "$tmp/land.log"
 ! grep -q 'then push its notes:' "$tmp/land.log"
 
 # A note failure is advisory only: landing and cleanup are already recorded,
