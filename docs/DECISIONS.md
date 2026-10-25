@@ -16,5 +16,8 @@ and apart from the code, so no tool could hook into it and Darrion had no way to
 judging it. A forge's pull request holds the same bundle but puts the record on a corporate service and makes
 review an online step; keeping it in git is local-first and travels with the repository
 (`~/Products/meta-analysis/PRINCIPLES.md`, Anti fascism, Simple design). Considered: git-appraise, which also
-stores reviews in git notes, but its last dated release is from 2020. Costs: notes need their own push refspec,
+stores reviews in git notes, but its last dated release is from 2020; and git-bug (Darrion, 2026-10-25), a live local-first
+tracker in git with GitHub and GitLab bridges, which holds issues and identities but no reviews or line-anchored
+comments yet (its author has said pull requests are next; unconfirmed). If git-bug gains reviews, revisit: it
+would be a local-first forge we need not build. Costs: notes need their own push refspec,
 and GitHub does not display them.
