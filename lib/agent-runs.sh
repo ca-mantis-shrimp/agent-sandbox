@@ -163,12 +163,13 @@ review_note_text() { # stdin: workspace JSON; empty when no parsed review
 
 verdict_note_text() { # stdin: workspace JSON; one ordered block per recorded judge
     jq -r '
+        def one_line: gsub("[[:space:]]+"; " ");
         def judge_lines($name): .[$name + "_verdict"] as $v
             | if ($v | type) != "object" then [] else
                 (["# verdict: \($name) \($v.agrees_with_review | if . then "agrees" else "disagrees" end) with the review (\($v.at))"]
-                 + [$v.overruled[]? | "overruled: \(.)"]
-                 + [$v.missed[]? | "missed: \(.)"]
-                 + (if ($v.note // "") == "" then [] else ["note: \($v.note)"] end))
+                 + [$v.overruled[]? | "overruled: \(. | one_line)"]
+                 + [$v.missed[]? | "missed: \(. | one_line)"]
+                 + (if ($v.note // "") == "" then [] else ["note: \($v.note | one_line)"] end))
               end;
         judge_lines("human") + judge_lines("facilitator") | join("\n")'
 }

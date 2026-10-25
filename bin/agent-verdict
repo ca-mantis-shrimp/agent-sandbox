@@ -67,18 +67,18 @@ jq --arg by "$by" --argjson agrees "$agree" --argjson overruled "$overruled" \
     '.[$by + "_verdict"] = {agrees_with_review: $agrees, overruled: $overruled,
                             missed: $missed, note: $note, at: $at}' \
     "$run/manifest.json" >"$tmp"
-if jq -e '.landed != null and .landed_commit != null' "$tmp" >/dev/null; then
-    repo=$(workspace_repo "$run") || { say "cannot find the repository for landed workspace $ws"; exit 1; }
-    commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$tmp") || {
-        say "landed workspace $ws has no recorded commit; cannot write its verdict note"
-        exit 1
-    }
-    git -C "$repo" cat-file -e "$commit^{commit}" || {
-        say "landed commit is unavailable for $ws: $commit"
-        exit 1
-    }
-    note=$(verdict_note_text <"$tmp")
-    printf '%s\n' "$note" | write_git_note "$repo" verdict "$commit"
+if jq -e '.landed != null' "$tmp" >/dev/null; then
+    if commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$tmp"); then
+        repo=$(workspace_repo "$run") || { say "cannot find the repository for landed workspace $ws"; exit 1; }
+        git -C "$repo" cat-file -e "$commit^{commit}" || {
+            say "landed commit is unavailable for $ws: $commit"
+            exit 1
+        }
+        note=$(verdict_note_text <"$tmp")
+        printf '%s\n' "$note" | write_git_note "$repo" verdict "$commit"
+    else
+        say "landed workspace $ws has no recorded commit; no verdict note was written"
+    fi
 fi
 mv "$tmp" "$run/manifest.json"
 say "recorded $by verdict for $ws"

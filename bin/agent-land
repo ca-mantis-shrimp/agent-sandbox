@@ -350,8 +350,10 @@ review_note=$(printf '%s\n' "$workspace" | review_note_text) || review_note=
 verdict_note=$(printf '%s\n' "$workspace" | verdict_note_text) || verdict_note=
 advance
 root_tip=$(git -C "$repo" rev-parse "$checkpoint/tip")
-if landing_note_commit=$(git -C "$repo" rev-parse --verify "$root_tip^2" 2>/dev/null); then
-    :
+if landing_note_parent=$(git -C "$repo" rev-parse --verify "$root_tip^2" 2>/dev/null) &&
+    branch_tip=$(git -C "$repo" rev-parse --verify "$branch" 2>/dev/null) &&
+    [ "$landing_note_parent" = "$branch_tip" ]; then
+    landing_note_commit=$landing_note_parent
 else
     landing_note_commit=$root_tip
 fi
@@ -386,6 +388,7 @@ for note_ref in review verdict; do
         push_refs="$push_refs refs/notes/$note_ref"
     fi
 done
-say "landed $branch; push when ready: git push origin$push_refs"
+say "landed $branch; push when ready: git push origin $branch"
+[ -z "$push_refs" ] || say "then push its notes: git push origin$push_refs"
 human_verdict_reminder "$id" "$workspace" ||
     say "warning: could not display the human verdict reminder"
