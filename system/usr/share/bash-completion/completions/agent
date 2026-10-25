@@ -20,6 +20,10 @@ _agent() {
         COMPREPLY=($(compgen -W "${commands[*]}" -- "$cur"))
         return
     fi
+    if [ "${COMP_WORDS[1]}" = show ] && [ "$COMP_CWORD" -eq 2 ]; then
+        COMPREPLY=($(compgen -W "$(agent-verdict --pending 2>/dev/null | cut -f1) -" -- "$cur"))
+        return
+    fi
     if [ "${COMP_WORDS[1]}" = verdict ]; then
         if ! declare -F _agent_verdict >/dev/null; then
             if declare -F _completion_loader >/dev/null; then
