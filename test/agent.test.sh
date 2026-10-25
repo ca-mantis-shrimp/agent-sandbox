@@ -86,6 +86,20 @@ bash -c '
 ' _ "$tmp/completion-bin-a" "$tmp/completion-bin-b" "$tmp/completions/agent" >"$tmp/out"
 printf 'echo\n' | cmp - "$tmp/out"
 
+# 'agent show' completes the landings waiting for a verdict, and '-'.
+mkdir -p "$tmp/show-bin"
+printf '#!/bin/sh\n[ "$1" = --pending ] && printf "20261025-000003\\tsrr\\tx\\tabc\\n"\n' >"$tmp/show-bin/agent-verdict"
+chmod +x "$tmp/show-bin/agent-verdict"
+bash -c '
+    PATH="$1:$PATH"
+    . "$2"
+    COMP_WORDS=(agent show "")
+    COMP_CWORD=2
+    _agent
+    printf "%s\n" "${COMPREPLY[@]}"
+' _ "$tmp/show-bin" "$tmp/completions/agent" >"$tmp/out"
+printf '20261025-000003\n-\n' | cmp - "$tmp/out"
+
 # Verdict loading first uses bash-completion's lazy loader through that symlink.
 bash -c '
     PATH="$1:$PATH"
