@@ -10,6 +10,7 @@ usage() {
     cat <<'HELP'
 usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
                      [--overrule <text>]... [--missed <text>]... [--note <text>]
+       agent-verdict --pending
 
 Records your judgment of a workspace's review in its manifest.json. After
 landing, it also updates refs/notes/verdict on the landed commit. A later call
@@ -20,11 +21,26 @@ replaces that judge's earlier verdict without changing another judge's verdict.
   --missed <text>       a problem the review did not catch (repeatable)
   --note <text>         anything else worth keeping
   --by                  who judges: human (default) or facilitator
+  --pending             list landings waiting for your verdict, newest first:
+                        workspace id, repository, label (tab-separated)
 
 Without --agree or --disagree nothing is recorded.
 HELP
 }
 [ $# -gt 0 ] || { usage; exit 0; }
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-runs.sh"
+if [ "$1" = --pending ]; then
+    # Only landings with a landed commit, i.e. with notes to read (2026-10-25 on).
+    for m in "$(runs_dir)"/*/manifest.json; do
+        [ -f "$m" ] || continue
+        d=${m%/manifest.json}
+        jq -r --arg id "${d##*/}" --arg label "$(jq -r '.label // ""' "$d/sessions/1.json" 2>/dev/null)" '
+            select(.landed != null and (.landed_commit // "") != "" and .human_verdict == null)
+            | [$id, (.repo // "" | split("/") | last), $label] | @tsv' "$m" 2>/dev/null
+    done | sort -r
+    exit 0
+fi
 ws=$1
 shift
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
@@ -56,8 +72,6 @@ if [ -z "$agree" ]; then
     [ -z "$note" ] && [ "$overruled" = '[]' ] && [ "$missed" = '[]' ] || { say "say --agree or --disagree; nothing recorded"; exit 2; }
     usage; exit 0
 fi
-tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
-. "$tool/lib/agent-runs.sh"
 run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
 tmp=$(mktemp "$run/manifest.verdict.XXXXXX")

@@ -1,0 +1,10 @@
+# bash completion for agent-verdict: workspace ids waiting for a verdict, then flags.
+_agent_verdict() {
+    local cur=${COMP_WORDS[COMP_CWORD]}
+    if [ "$COMP_CWORD" -eq 1 ]; then
+        COMPREPLY=($(compgen -W "$(agent-verdict --pending 2>/dev/null | cut -f1) --pending" -- "$cur"))
+    else
+        COMPREPLY=($(compgen -W "--agree --disagree --overrule --missed --note --by" -- "$cur"))
+    fi
+}
+complete -F _agent_verdict agent-verdict

@@ -110,6 +110,7 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | add a session | `agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |
 | fix a review | `agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
+| list landings awaiting a human verdict | `agent-verdict --pending` (bash completion offers these ids) |
 | record the human's or facilitator's judgment | `agent-verdict <workspace> --agree\|--disagree [--by human\|facilitator] [--overrule <text>]... [--missed <text>]... [--note <text>]` (no judgment flag: help, nothing recorded) |
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
