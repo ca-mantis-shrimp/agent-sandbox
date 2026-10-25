@@ -84,4 +84,9 @@ printf '{"n":2,"state":"running","read_only":false}\n' >"$AGENT_RUNS/recorded-ru
 fails "$tool/bin/agent-retire" recorded-running
 [ -d "$AGENT_RUNS/recorded-running/work" ]
 
+make_workspace corrupt-record
+printf '{invalid json\n' >"$AGENT_RUNS/corrupt-record/sessions/2.json"
+fails "$tool/bin/agent-retire" corrupt-record
+[ -d "$AGENT_RUNS/corrupt-record/work" ]
+
 echo 'retire.test > ok'
