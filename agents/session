@@ -65,11 +65,22 @@ log="$job/transcripts/$n.jsonl"
 cd "$job/work"
 # Capture the actual snapshot before setup or model tools can change it. This
 # runs inside the sandbox: the host never invokes Git in a workspace clone.
-heads=$(
-    git rev-parse HEAD | jq -R '{".": .}'
-    git submodule --quiet foreach --recursive 'git rev-parse HEAD | jq -R --arg path "$displaypath" "{(\$path): .}"'
+capture_heads() (
+    head=$(git rev-parse --verify HEAD) || exit 1
+    jq -ne --arg head "$head" '$head | select(test("^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")) | {".": .}' || exit 1
+    git submodule --quiet foreach --recursive '
+        head=$(git rev-parse --verify HEAD) || exit 1
+        jq -ne --arg path "$displaypath" --arg head "$head" '\''$head | select(test("^([0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")) | {($path): .}'\'' || exit 1
+    ' || exit 1
 )
-heads=$(printf '%s\n' "$heads" | jq -s 'add')
+# No pipeline may hide Git's failure, and no partial map survives one broken
+# submodule. This advisory must not prevent setup, the harness, or export.
+if heads=$(capture_heads) && heads=$(printf '%s\n' "$heads" | jq -s 'add'); then
+    :
+else
+    heads=null
+    echo 'session > could not capture start heads; continuing without metadata' >&2
+fi
 jq --argjson heads "$heads" '.head_at_start = $heads' "$record" >"/tmp/session-$n-start.json"
 cp "/tmp/session-$n-start.json" "$record"
 readonly=$(jq -r '.read_only // false' "$record")

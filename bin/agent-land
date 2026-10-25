@@ -63,7 +63,7 @@ stop() {
     say "$*"
     exit 1
 }
-if [ -n "$(jq -r '.landed // empty' "$run/manifest.json")" ]; then
+if [ -f "$run/manifest.json" ] && [ -n "$(jq -r '.landed // empty' "$run/manifest.json")" ]; then
     workspace=$(workspace_json "$run" | jq --arg id "$id" '.id = (.id // $id)')
     write_review_thread "$repo" "$workspace" || stop "could not retry review thread"
     say "already landed; review thread saved"
@@ -331,7 +331,7 @@ work_closing=$(printf '%s\n' "$workspace" | jq -r '
      | if length == 0 then "" else max_by(.n // 0).closing end)
     | if . == "" then "" else split("\n\n")[0] end
     | gsub("^[\r\n]+|[\r\n]+$"; "")')
-finding_trailers=$(printf '%s\n' "$workspace" | jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers')
+finding_trailers=$(review_finding_trailers "$repo" "$workspace")
 check_harvested
 # Check all harvested repos before even merging a submodule into the candidate.
 for sm in . $submodules; do
@@ -387,6 +387,9 @@ write_landing_note() { # <ref>
 }
 # Every review/fix stays on its own anchor, not the final branch tip. Retained
 # session records allow an idempotent retry after an advisory note-write failure.
+# Cleanup deleted harvested branches; validate against the recorded landing
+# commit (and its gitlinks) rather than a branch or the host's moving HEAD.
+workspace=$(printf '%s\n' "$workspace" | jq --arg commit "$landing_note_commit" '.landed_commit = $commit')
 if ! write_review_thread "$repo" "$workspace"; then
     say "warning: could not write review thread; rerun agent-land $id to retry from retained records"
 fi

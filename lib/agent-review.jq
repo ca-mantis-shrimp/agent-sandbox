@@ -38,17 +38,18 @@ def workspace_reviews:
   (.reviews[]? | . + {source: "external review \(.id) by \(.reviewer)", at: (.at // "")});
 
 # Outcomes are a landing-time projection, never mutations to review records.
-# Only a later writer with a produced commit can substantiate a fix.
+# A linked (or, for legacy records, later) writer with a host-validated
+# produced commit can substantiate a fix. The host filters commits first.
 def finding_trailers:
   . as $w
   | [workspace_reviews | select(.review | valid_review_report)] | sort_by(.at) | last as $r
   | select($r != null)
   | $r.review | identified_findings($r.id) as $f
   | [$w.sessions[]? | select(.read_only != true)
-     | select(if $r.n != null then (.n // 0) > $r.n
-              else (.started // "") > $r.at end)
+     | select(if .review_session != null then .review_session == $r.id
+              elif $r.n != null then (.n // 0) > $r.n
+              else (.started // "") >= $r.at end)
      | . as $s | fix_report as $report
-     | select($s.review_session == null or $s.review_session == $r.id)
      | (($s.commits["."][0] // [$s.commits[]?[]?][0]) // "") as $commit
      | select($report != null and $commit != "")
      | select(any($report.fixed[]; . == $f.id or
@@ -73,7 +74,7 @@ def review_thread_records:
          ($s | fix_report) as $report | select($report != null)
          | ($s.commits // {} | to_entries[] | select(.value | length > 0)) as $head
          | {path: $head.key, commit: $head.value[0],
-            text: "# fix: \($w.id // "workspace")/\($s.n) by \($s.model // "unknown")\nanswers review: \($s.review_session // ([$report.fixed[], $report.declined[]?.id // empty | select(contains("#")) | split("#")[0]] | unique | join(", ")))\n\($report | tojson)"}
+            text: "# fix: \($w.id // "workspace")/\($s.n) by \($s.model // "unknown")\nanswers review\(if any($w.reviews[]?; .id == $s.review_session) then " file" else "" end): \($s.review_session // ([$report.fixed[], $report.declined[]?.id // empty | select(contains("#")) | split("#")[0]] | unique | join(", ")))\n\($report | tojson)"}
        else empty end);
 
 def blocking_review_lines:

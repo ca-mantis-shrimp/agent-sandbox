@@ -164,28 +164,108 @@ write_git_note() { # <repo> <note-ref> <commit>; append a verdict record
     git -C "$1" notes --ref="refs/notes/$2" append --file=- "$3"
 }
 
+full_commit_hash() {
+    case "${#1}" in 40|64) ;; *) return 1 ;; esac
+    case "$1" in *[!0-9a-fA-F]*) return 1 ;; esac
+}
+
+# Resolve the recorded root revision's gitlinks, including nested submodules,
+# using host object stores only. No agent-supplied path may reach this helper
+# until it has passed repo_paths' host whitelist.
+review_repo_revision() ( # <real-repo> <root-revision> <repo-path>
+    revision_repo=$1 revision=$2 remaining=$3
+    full_commit_hash "$revision" || return 1
+    [ "$remaining" != . ] || { printf '%s\n' "$revision"; return; }
+    prefix=
+    while [ -n "$remaining" ]; do
+        part=${remaining%%/*}
+        if [ "$part" = "$remaining" ]; then remaining=; else remaining=${remaining#*/}; fi
+        prefix=${prefix:+$prefix/}$part
+        object=$(git -C "$revision_repo" rev-parse --verify "$revision:$prefix" 2>/dev/null) || return 1
+        kind=$(git -C "$revision_repo" cat-file -t "$object" 2>/dev/null) || kind=
+        # Gitlinks can name objects available only in the submodule's store.
+        if [ "$kind" != tree ]; then
+            [ -d "$revision_repo/$prefix" ] || return 1
+            [ "$(git -C "$revision_repo/$prefix" rev-parse --show-toplevel)" = "$revision_repo/$prefix" ] || return 1
+            revision_repo=$revision_repo/$prefix revision=$object prefix=
+        fi
+    done
+    [ -z "$prefix" ] || return 1
+    printf '%s\n' "$revision"
+)
+
+review_anchor_valid() ( # <real-repo> <workspace-json> <host-repo-path> <sha>
+    anchor_repo=$1 anchor_ws=$2 anchor_path=$3 anchor=$4
+    full_commit_hash "$anchor" || return 1
+    anchor_paths=$(repo_paths "$anchor_repo") || return 1
+    printf '%s\n' "$anchor_paths" | grep -Fx -- "$anchor_path" >/dev/null || return 1
+    [ -d "$anchor_repo/$anchor_path" ] || return 1
+    root_base=$(printf '%s\n' "$anchor_ws" | jq -r '.base // empty') || return 1
+    anchor_base=$(review_repo_revision "$anchor_repo" "$root_base" "$anchor_path") || return 1
+    landed=$(printf '%s\n' "$anchor_ws" | jq -r '.landed_commit // empty') || return 1
+    if [ -n "$landed" ]; then
+        anchor_tip=$(review_repo_revision "$anchor_repo" "$landed" "$anchor_path") || return 1
+    else
+        anchor_id=$(printf '%s\n' "$anchor_ws" | jq -r '.id // empty') || return 1
+        [ -n "$anchor_id" ] || return 1
+        anchor_tip=$(git -C "$anchor_repo/$anchor_path" rev-parse --verify "refs/heads/agent/$anchor_id^{commit}" 2>/dev/null) || return 1
+    fi
+    git -C "$anchor_repo/$anchor_path" cat-file -e "$anchor_base^{commit}" 2>/dev/null || return 1
+    git -C "$anchor_repo/$anchor_path" merge-base --is-ancestor "$anchor" "$anchor_tip" 2>/dev/null || return 1
+    if git -C "$anchor_repo/$anchor_path" merge-base --is-ancestor "$anchor" "$anchor_base" 2>/dev/null; then return 1; fi
+)
+
+# The same host-validated range governs notes and claims in merge trailers.
+# Filter all produced commits, not just the first: an invalid root anchor must
+# not hide a genuine fix in a changed submodule (or a later valid commit).
+review_finding_trailers() ( # <real-repo> <workspace-json>
+    trailer_repo=$1 trailer_ws=$2
+    pairs=$(printf '%s\n' "$trailer_ws" | jq -c '[.sessions[]?.commits // {} | to_entries[] | .key as $path | .value[] | {path:$path,commit:.}] | unique[]') || return 1
+    valid=$(
+        if [ -n "$pairs" ]; then
+            printf '%s\n' "$pairs" | while IFS= read -r pair; do
+                path=$(printf '%s\n' "$pair" | jq -r .path)
+                commit=$(printf '%s\n' "$pair" | jq -r .commit)
+                if review_anchor_valid "$trailer_repo" "$trailer_ws" "$path" "$commit"; then
+                    printf '%s\n' "$pair"
+                else
+                    printf 'agent-sandbox > warning: rejected fix anchor %s %s\n' "$path" "$commit" >&2
+                fi
+            done
+        fi
+    ) || return 1
+    { printf '%s\n' "$trailer_ws"; printf '%s\n' "$valid" | jq -s .; } |
+        jq -sr -L "$tool/lib" 'include "agent-review"; .[1] as $valid | .[0]
+            | .sessions |= ((. // []) | map(.commits |= ((. // {}) | with_entries(.key as $path |
+                .value |= map(. as $sha | select(any($valid[]; .path == $path and .commit == $sha)))))))
+            | finding_trailers'
+)
+
 write_review_thread() ( # <real-repo> <workspace-json>; harvested commits only
     thread_repo=$1
-    thread_paths=$(repo_paths "$thread_repo") || return 1
     thread_rows=$(printf '%s\n' "$2" | jq -c -L "$tool/lib" 'include "agent-review"; review_thread_records') || return 1
     [ -n "$thread_rows" ] || return 0
-    printf '%s\n' "$thread_rows" | while IFS= read -r row; do
+    write_failed=0
+    while IFS= read -r row; do
         path=$(printf '%s\n' "$row" | jq -r .path)
         commit=$(printf '%s\n' "$row" | jq -r .commit)
         text=$(printf '%s\n' "$row" | jq -r .text)
         header=$(printf '%s\n' "$text" | head -n 1)
         # Paths in agent-writable records are not authority to visit another
         # checkout (especially a workspace). Only host-declared repo paths count.
-        printf '%s\n' "$thread_paths" | grep -Fqx -- "$path" || return 1
-        [ -d "$thread_repo/$path" ] || return 1
-        printf '%s\n' "$commit" | grep -Eq '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$' || return 1
-        git -C "$thread_repo/$path" cat-file -e "$commit^{commit}" || return 1
+        if ! review_anchor_valid "$thread_repo" "$2" "$path" "$commit"; then
+            printf 'agent-sandbox > warning: rejected review thread row %s %s (%s)\n' "$path" "$commit" "$header" >&2
+            continue
+        fi
         existing=$(git -C "$thread_repo/$path" notes --ref=review show "$commit" 2>/dev/null) || existing=
         if printf '%s\n' "$existing" | grep -Fqx "$header"; then continue; fi
         if [ -z "$existing" ]; then action=add; else action=append; fi
         printf '%s\n' "$text" |
-            git -C "$thread_repo/$path" notes --ref=review "$action" --file=- "$commit" || return 1
-    done
+            git -C "$thread_repo/$path" notes --ref=review "$action" --file=- "$commit" || write_failed=1
+    done <<EOF
+$thread_rows
+EOF
+    return "$write_failed"
 )
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
