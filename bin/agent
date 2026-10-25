@@ -1,0 +1,46 @@
+#!/bin/sh
+# Dispatch agent commands and provide their shared help.
+set -eu
+bin=$(dirname -- "$(readlink -f -- "$0")")
+
+command_list() {
+    printf 'Commands (use: agent <command>):\n'
+    for script in "$bin"/agent-*; do
+        [ -f "$script" ] || continue
+        name=${script##*/}
+        summary=$(sed -n '2s/^# //p' "$script")
+        printf '%s\t%s\n' "$name" "$summary"
+    done
+}
+
+command_help() {
+    script=$bin/agent-$1
+    [ -f "$script" ] || { unknown "$1"; }
+    awk 'NR == 1 { next }
+         /^#/ { sub(/^# ?/, ""); print; next }
+         { exit }' "$script"
+}
+
+unknown() {
+    printf 'agent: unknown command: %s\n' "$1" >&2
+    command_list
+    exit 2
+}
+
+[ "$#" -gt 0 ] || { command_list; exit 0; }
+if [ "$1" = help ]; then
+    shift
+    [ "$#" -gt 0 ] || { command_list; exit 0; }
+    [ "$#" -eq 1 ] || { unknown "$*"; }
+    command_help "${1#agent-}"
+    exit 0
+fi
+command=${1#agent-}
+shift
+if [ "$#" -eq 1 ] && { [ "$1" = --help ] || [ "$1" = -h ]; }; then
+    command_help "$command"
+    exit 0
+fi
+script=$bin/agent-$command
+[ -f "$script" ] || unknown "$command"
+exec "$script" "$@"

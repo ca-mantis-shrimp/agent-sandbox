@@ -105,7 +105,8 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 
 | To | Command |
 | --- | --- |
-| create a workspace only | `agent-new` (prints its id) |
+| get command help | `agent help` |
+| create a workspace only | `agent new` or `agent-new` (prints its id) |
 | start any task in a new workspace | `agent-run --prompt <file\|text>` |
 | add a session | `agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |

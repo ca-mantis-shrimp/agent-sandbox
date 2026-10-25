@@ -1,4 +1,5 @@
 #!/bin/sh
+# Gate and merge a harvested workspace into its original repositories.
 #
 # Land a harvested workspace: merge branch agent/<id> into the checked-out
 # branch of every repo, bottom-up, gate the result, then delete the branch.
