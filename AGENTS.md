@@ -15,3 +15,4 @@ Ground rules:
 - Installing is a declaration (this repository at a pinned revision, `bin/` on `PATH`), not a script.
 - POSIX `sh`, `jq` and Git, no other runtime. `lib/` holds what more than one command needs.
 - Run `sh test/<name>.test.sh` for what you touch; `land.test.sh` stubs systemctl; image mounts and isolation need host verification. A change to `agents/` (the session runner, the image layer) needs a real session to prove it.
+- Put test-first changes in a separate commit whose subject starts `test:` or `test(<scope>):`; legacy `Tests:` subjects remain supported by the landing lock.
