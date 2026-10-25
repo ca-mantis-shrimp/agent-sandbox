@@ -18,8 +18,19 @@ jq -e '.keep.value == 1 and .landed == "yesterday" and .human_verdict == {
     agrees_with_review:true, overruled:["false \"alarm\"","second"],
     missed:["first miss","second\nline"], note:"Human said: keep $behavior.",
     at:.human_verdict.at} and (.human_verdict.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))' "$manifest" >/dev/null
+# Without --agree or --disagree nothing is recorded: no flags prints help,
+# other flags alone are refused.
+cp "$manifest" "$tmp/before"
+sh "$verdict" ws >"$tmp/out" 2>"$tmp/err"
+grep -qF -- '--agree|--disagree' "$tmp/out" && cmp "$tmp/before" "$manifest"
+sh "$verdict" >"$tmp/out" 2>"$tmp/err"
+grep -qF 'usage: agent-verdict' "$tmp/out"
+sh "$verdict" ws --by facilitator >"$tmp/out" 2>&1 && cmp "$tmp/before" "$manifest"
+if sh "$verdict" ws --missed 'x' >/dev/null 2>&1; then echo 'judgment-free flags unexpectedly succeeded' >&2; exit 1; fi
+if sh "$verdict" ws --agree --disagree >/dev/null 2>&1; then echo 'both judgments unexpectedly succeeded' >&2; exit 1; fi
+cmp "$tmp/before" "$manifest"
 # Re-recording replaces one verdict, not a history or concatenated arrays.
-sh "$verdict" ws >/dev/null 2>&1
+sh "$verdict" ws --disagree >/dev/null 2>&1
 jq -e '.human_verdict.agrees_with_review == false and
     .human_verdict.overruled == [] and .human_verdict.missed == [] and
     .human_verdict.note == "" and .keep.value == 1' "$manifest" >/dev/null
@@ -47,7 +58,7 @@ refuse() {
     [ ! -s "$tmp/out" ] && [ -s "$tmp/err" ]
     jq -n -e --rawfile after "$manifest" --rawfile before "$tmp/before" '$after == $before' >/dev/null
 }
-refuse unknown
+refuse unknown --agree
 refuse ../ws
 refuse ws/1
 refuse ws --unknown
@@ -65,18 +76,18 @@ human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
 [ ! -s "$tmp/reminder" ]
 printf '{"n":1,"read_only":true,"review":{"verdict":"land"}}\n' >"$AGENT_RUNS/ws/sessions/1.json"
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
-grep -qF 'agent-verdict ws' "$tmp/reminder"
+grep -qF 'agent-verdict ws --agree|--disagree' "$tmp/reminder"
 sh "$verdict" ws --agree >/dev/null 2>&1
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
 [ ! -s "$tmp/reminder" ]
 # A facilitator verdict does not silence the human's landing reminder.
 jq 'del(.human_verdict)' "$manifest" >"$tmp/manifest"
 mv "$tmp/manifest" "$manifest"
-sh "$verdict" ws --by facilitator >/dev/null 2>&1
+sh "$verdict" ws --by facilitator --disagree >/dev/null 2>&1
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
-grep -qF 'agent-verdict ws' "$tmp/reminder"
+grep -qF 'agent-verdict ws --agree|--disagree' "$tmp/reminder"
 rm "$AGENT_RUNS/ws/sessions/1.json"
 printf '{"sessions":[{"review":{"unparsed":true}}]}\n' >"$manifest"
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
-grep -qF 'agent-verdict ws' "$tmp/reminder"
+grep -qF 'agent-verdict ws --agree|--disagree' "$tmp/reminder"
 echo 'agent-verdict.test > ok'

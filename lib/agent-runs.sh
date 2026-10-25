@@ -143,7 +143,7 @@ human_verdict_reminder() { # <workspace-id> <workspace-json>
     printf '%s\n' "$2" | jq -r -L "$tool/lib" --arg ws "$1" '
         include "agent-review";
         select(.human_verdict == null and ([workspace_reviews] | length > 0))
-        | "agent-land > review has no human verdict; record the human’s call with agent-verdict \($ws)"' >&2
+        | "agent-land > review has no human verdict; say whether you agree with the review: agent-verdict \($ws) --agree|--disagree"' >&2
 }
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules

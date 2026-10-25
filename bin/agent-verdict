@@ -1,20 +1,43 @@
 #!/bin/sh
 # Record a judge's call, including after landing; no interactive prompts.
-# Usage: agent-verdict <workspace> [--by human|facilitator] [--agree] [--overrule <text>]...
-#        [--missed <text>]... [--note <text>]
+# Usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
+#        [--overrule <text>]... [--missed <text>]... [--note <text>]
+# Without --agree or --disagree it records nothing and prints help: a bare run
+# once recorded "disagrees" by default (2026-10-25).
 set -eu
 say() { echo "agent-verdict > $*" >&2; }
-ws=${1:?usage: agent-verdict <workspace> [--by human|facilitator] [--agree] [--overrule <text>]... [--missed <text>]... [--note <text>]}
+usage() {
+    cat <<'HELP'
+usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
+                     [--overrule <text>]... [--missed <text>]... [--note <text>]
+
+Records your judgment of a workspace's review in its manifest.json. It does not
+land, change or undo anything, and a later call replaces the earlier one.
+
+  --agree / --disagree  whether you agree with the reviewer's verdict (required)
+  --overrule <text>     a review finding you reject (repeatable)
+  --missed <text>       a problem the review did not catch (repeatable)
+  --note <text>         anything else worth keeping
+  --by                  who judges: human (default) or facilitator
+
+Without --agree or --disagree nothing is recorded.
+HELP
+}
+[ $# -gt 0 ] || { usage; exit 0; }
+ws=$1
 shift
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
-by=human agree=false overruled='[]' missed='[]' note=''
+by=human agree='' overruled='[]' missed='[]' note=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --by)
             by=${2:?--by needs human or facilitator}
             case "$by" in human | facilitator) ;; *) say "unknown judge: $by"; exit 2 ;; esac
             shift 2 ;;
-        --agree) agree=true; shift ;;
+        --agree | --disagree)
+            v=true; [ "$1" = --agree ] || v=false
+            [ -z "$agree" ] || [ "$agree" = "$v" ] || { say "choose one of --agree and --disagree"; exit 2; }
+            agree=$v; shift ;;
         --overrule)
             text=${2:?--overrule needs text}
             overruled=$(jq -cn --argjson items "$overruled" --arg text "$text" '$items + [$text]')
@@ -27,6 +50,11 @@ while [ $# -gt 0 ]; do
         *) say "unknown argument: $1"; exit 2 ;;
     esac
 done
+if [ -z "$agree" ]; then
+    # Other flags without a judgment are a mistake; no flags at all ask for help.
+    [ -z "$note" ] && [ "$overruled" = '[]' ] && [ "$missed" = '[]' ] || { say "say --agree or --disagree; nothing recorded"; exit 2; }
+    usage; exit 0
+fi
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-runs.sh"
 run="$(runs_dir)/$ws"
