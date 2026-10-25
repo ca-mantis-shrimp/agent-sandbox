@@ -1,8 +1,6 @@
 #!/bin/sh
 # Fetch a workspace's commits back into the original repositories.
 #
-# Bring a workspace's commits back into the checkout it was cloned from.
-#
 #   agent-harvest <workspace>
 #
 # Fetches branch agent/<workspace> from session bundles into that repo and each

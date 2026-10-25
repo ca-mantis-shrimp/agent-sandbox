@@ -1,7 +1,6 @@
 #!/bin/sh
 # Build one extension layer (sysext + confext pair) from its recipe.
 # Usage: agent-layer <slot> <name> <recipe-dir> [--force]
-# Build one extension layer (sysext + confext pair) on the host base, only when stale.
 # Bases are pinned; layers float. A layer is rebuilt when its recipe changes, its base
 # changes, or it is older than AGENT_LAYER_MAX_AGE seconds (default 604800). Each build
 # records what it installed in $AGENT_LAYERS/<name>.build.json.

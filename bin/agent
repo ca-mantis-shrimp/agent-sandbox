@@ -7,7 +7,7 @@ command_list() {
     printf 'Commands (use: agent <command>):\n'
     for script in "$bin"/agent-*; do
         [ -f "$script" ] || continue
-        name=${script##*/}
+        name=${script##*/agent-}
         summary=$(sed -n '2s/^# //p' "$script")
         printf '%s\t%s\n' "$name" "$summary"
     done
@@ -28,10 +28,14 @@ unknown() {
 }
 
 [ "$#" -gt 0 ] || { command_list; exit 0; }
+if [ "$1" = --help ] || [ "$1" = -h ]; then
+    command_list
+    exit 0
+fi
 if [ "$1" = help ]; then
     shift
     [ "$#" -gt 0 ] || { command_list; exit 0; }
-    [ "$#" -eq 1 ] || { unknown "$*"; }
+    [ "$#" -eq 1 ] || { command_list; exit 0; }
     command_help "${1#agent-}"
     exit 0
 fi

@@ -1,7 +1,7 @@
 #!/bin/sh
-# Finalize sessions whose unit has stopped, including ones whose launcher did
-# not wait for them: write the session's terminal state, outcome, exit code and
-# the commits it made into its record. The static unit is retained.
+# Finalize stopped sessions and record their outcomes.
+# Write terminal state, outcome, exit code and commits into each session record;
+# the static unit is retained.
 #
 #   agent-reconcile <workspace>        every session that has ended
 #   agent-reconcile <workspace>/<n>    that session
