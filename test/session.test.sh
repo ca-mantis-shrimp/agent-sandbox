@@ -23,6 +23,7 @@ echo credential-token >"$CREDENTIALS_DIRECTORY/agent.claude_token"
 "$tool/agents/session" 1
 [ "$(cat "$AGENT_JOB/token-seen")" = credential-token ]
 jq -e '.ok and .closing == "done"' "$AGENT_JOB/sessions/1.json" >/dev/null
+jq -e --arg head "$(git -C "$AGENT_JOB/work" rev-parse HEAD)" '.head_at_start["."] == $head' "$AGENT_JOB/sessions/1.json" >/dev/null
 
 # Fixers use conventional test-first subjects and keep Tests: as a legacy form.
 grep -Fq 'Commit tests first, with a subject starting `test:` or `test(<scope>):`;' "$tool/agents/run-kinds/fix.md"
