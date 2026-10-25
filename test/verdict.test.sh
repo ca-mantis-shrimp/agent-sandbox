@@ -125,4 +125,20 @@ grep -Fqx '# verdict: facilitator disagrees with the review ('"$(jq -r .facilita
 grep -Fqx 'overruled: first finding' "$tmp/verdict-note"
 grep -Fqx 'missed: facilitator miss' "$tmp/verdict-note"
 grep -Fqx 'note: human note' "$tmp/verdict-note"
-echo 'agent-verdict.test > ok'
+# --pending lists landed workspaces with a landed commit and no human verdict,
+# newest first, as id, repository and first session label, tab-separated.
+pend="$tmp/pending-runs"
+mkdir -p "$pend/20261001-000000/sessions" "$pend/20261002-000000/sessions" \
+    "$pend/20261003-000000" "$pend/20261004-000000" "$pend/20261005-000000"
+printf '{"repo":"/x/srr","landed":"t","landed_commit":"abc"}\n' >"$pend/20261001-000000/manifest.json"
+printf '{"n":1,"label":"payment-boundary"}\n' >"$pend/20261001-000000/sessions/1.json"
+printf '{"repo":"/x/platform","landed":"t","landed_commit":"def"}\n' >"$pend/20261002-000000/manifest.json"
+printf '{"repo":"/x/srr","landed":"t","landed_commit":"ghi","human_verdict":{"agrees_with_review":true}}\n' >"$pend/20261003-000000/manifest.json"
+printf '{"repo":"/x/srr","landed":"t"}\n' >"$pend/20261004-000000/manifest.json"
+printf '{"repo":"/x/srr"}\n' >"$pend/20261005-000000/manifest.json"
+AGENT_RUNS=$pend sh "$verdict" --pending >"$tmp/pending" 2>"$tmp/err"
+printf '20261002-000000\tplatform\t\n20261001-000000\tsrr\tpayment-boundary\n' | cmp - "$tmp/pending"
+# Nothing pending prints nothing and succeeds.
+AGENT_RUNS="$tmp/empty-runs" sh "$verdict" --pending >"$tmp/pending"
+[ ! -s "$tmp/pending" ]
+echo 'agent-verdict.test > ok' 
