@@ -101,7 +101,7 @@ A driver that turns a project's tasks into sessions belongs to that project, bes
 
 ## Commands
 
-Run these from the host, not inside an agent session.
+Run these from the host, not inside an agent session. The unfiltered `agent-status` listing omits retired workspaces; their records and transcripts remain on disk, and `agent-status <workspace>` can still show a retired workspace's state.
 
 | To | Command |
 | --- | --- |

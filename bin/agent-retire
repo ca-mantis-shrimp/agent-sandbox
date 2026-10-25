@@ -62,6 +62,14 @@ while IFS= read -r path; do
         echo "agent-retire > $path has commits beyond $base; land or harvest the work first" >&2
         exit 1
     fi
+    if ! dirty=$(git -C "$dir" status --porcelain --untracked-files=all --ignore-submodules=all); then
+        echo "agent-retire > cannot inspect working tree in $path; refusing to discard unknown work" >&2
+        exit 1
+    fi
+    if [ -n "$dirty" ]; then
+        echo "agent-retire > $path has uncommitted or untracked changes; refusing to discard unknown work" >&2
+        exit 1
+    fi
 done <<EOF
 $paths
 EOF
