@@ -54,8 +54,10 @@ write_agent_run "$run" "$repo" "$harness" "$model" "$n" "$readonly"
 printf '%s\n' "$prompt_text" >"$run/prompts/$n.md"
 jq -n --argjson n "$n" --arg label "$label" --arg harness "$harness" --arg model "$model" \
     --argjson ro "$readonly" --argjson layers "$layers" --arg started "$(date -Iseconds)" \
+    --arg review_session "${AGENT_REVIEW_SESSION:-}" \
     '{n: $n, label: $label, harness: $harness, model: $model, read_only: $ro, layers: $layers,
-      prompt: "prompts/\($n).md", state: "running", started: $started}' \
+      prompt: "prompts/\($n).md", state: "running", started: $started}
+      + (if $review_session == "" then {} else {review_session: $review_session} end)' \
     >"$run/sessions/$n.json"
 say "session $ws/$n: $harness $model as $unit (transcripts in $run/transcripts/)"
 start_status=0

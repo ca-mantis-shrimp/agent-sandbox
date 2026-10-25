@@ -135,7 +135,7 @@ grep -q 'sub is on a detached HEAD' "$tmp/land.log"
 [ "$(head_of "$root/sub")" = "$before_sub" ]
 git -C "$root/sub" switch -q main
 land detached
-! grep -Eiq 'fatal:|error:' "$tmp/land.log"
+fails grep -Eiq 'fatal:|error:' "$tmp/land.log"
 [ "$(cat "$root/note")" = detached ]
 [ "$(cat "$root/sub/state")" = detached ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
@@ -176,7 +176,7 @@ git -C "$partial" update-ref refs/agent/land-base HEAD
 [ ! -f "$partial/.git/agent-land-built" ]
 land incomplete
 grep -q 'removing incomplete candidate' "$tmp/land.log"
-! grep -Eiq 'fatal:|error:' "$tmp/land.log"
+fails grep -Eiq 'fatal:|error:' "$tmp/land.log"
 [ "$(cat "$root/note")" = incomplete ]
 [ "$(cat "$root/sub/state")" = incomplete ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
@@ -274,7 +274,7 @@ flock -n -x "$AGENT_LAYERS/.build/$(basename "$root").lock" true
 # The candidate's workspace lock stayed held through unit start and landing cleanup.
 grep -qx "held $XDG_RUNTIME_DIR/agent-sandbox/land-green.lock" "$GATE_LOG"
 grep -qx 'held cleanup' "$GATE_LOG"
-! grep -q '^free' "$GATE_LOG"
+fails grep -q '^free' "$GATE_LOG"
 [ -z "$(git -C "$root" status --porcelain)" ]
 fails git -C "$root" rev-parse -q --verify refs/heads/agent/green >/dev/null
 fails git -C "$root/sub" rev-parse -q --verify refs/heads/agent/green >/dev/null
@@ -544,8 +544,8 @@ commit "$notesroot" change reviewed
 reviewed_tip=$(head_of "$notesroot")
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/with-review"
-jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
-    {n:1,read_only:false,closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
+jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$reviewed_tip" '{repo:$repo, base:$base, sessions:[
+    {n:1,read_only:false,commits:{".":[$tip]},closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
     {n:2,read_only:true,model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
         {severity:"nit",file:"old",line:4,what:"Old review",why:"Not newest."}],coverage:[],for_human:[]}},
     {n:3,read_only:true,model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
@@ -556,12 +556,13 @@ jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
 root_merge=$(head_of "$notesroot")
 review_target=$(git -C "$notesroot" rev-parse "$root_merge^2")
 [ "$review_target" = "$reviewed_tip" ]
-git -C "$notesroot" notes --ref=review show "$review_target" >"$tmp/review-note"
-[ "$(sed -n 1p "$tmp/review-note")" = '# review: land after fixes by reviewer-model (session 3)' ]
-grep -Fqx 'change:1: should-fix: Handle this — It can fail.' "$tmp/review-note"
-grep -Fqx '(approach): nit: Simplify this — Less code.' "$tmp/review-note"
-! grep -Fq 'Old review' "$tmp/review-note"
-git -C "$notesroot" notes --ref=verdict show "$review_target" >"$tmp/verdict-note"
+git -C "$notesroot" notes --ref=review show "$root_merge" >"$tmp/review-note"
+grep -Fqx '# review with-review/3: land after fixes by reviewer-model' "$tmp/review-note"
+grep -Fqx 'change:1: should-fix: 3#1 Handle this — It can fail.' "$tmp/review-note"
+grep -Fqx '(approach): nit: 3#2 Simplify this — Less code.' "$tmp/review-note"
+grep -Fq '2#1 Old review' "$tmp/review-note"
+git -C "$notesroot" log -1 --format='%(trailers:key=Finding-Open,valueonly)' | grep -Fqx '3#1 Handle this (should-fix)'
+git -C "$notesroot" notes --ref=verdict show "$root_merge" >"$tmp/verdict-note"
 grep -Fqx '# verdict: human agrees with the review (2026-10-25T10:00:00Z)' "$tmp/verdict-note"
 grep -Fqx 'overruled: false alarm' "$tmp/verdict-note"
 grep -Fqx 'missed: missed bug' "$tmp/verdict-note"
@@ -569,10 +570,42 @@ grep -Fqx 'note: checked carefully' "$tmp/verdict-note"
 message=$(git -C "$notesroot" show -s --format=%B "$root_merge")
 printf '%s\n' "$message" | grep -Fqx 'Implemented the reviewed change.'
 printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
-! printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'
+if printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'; then exit 1; fi
 grep -Fqx 'agent-land > landed agent/with-review; push when ready' "$tmp/land.log"
-! grep -Fq 'git push origin agent/' "$tmp/land.log"
+fails grep -Fq 'git push origin agent/' "$tmp/land.log"
 grep -q 'agent-land > then push its notes: git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
+
+# A fix round is part of the same landed conversation; trailers credit its session.
+git -C "$notesroot" switch -q -c agent/fixed-review
+commit "$notesroot" bug introduced
+before_fix=$(head_of "$notesroot")
+commit "$notesroot" bug repaired
+after_fix=$(head_of "$notesroot")
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/fixed-review"
+jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg before "$before_fix" --arg after "$after_fix" '{repo:$repo,base:$base,sessions:[
+ {n:0,commits:{".":[$before]}},
+ {n:1,read_only:true,model:"reviewer",review:{verdict:"land after fixes",coverage:[],for_human:[],findings:[{file:"bug",line:1,severity:"blocking",what:"Repair bug",why:"Fails"}]}},
+ {n:2,read_only:false,review_session:"1",commits:{".":[$after]},closing:"```json\n{\"fixed\":[\"1#1\"],\"declined\":[]}\n```"}
+]}' >"$AGENT_RUNS/fixed-review/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
+git -C "$notesroot" log -1 --format='%(trailers:key=Finding-Fixed,valueonly)' |
+ grep -Fqx "1#1 Repair bug (blocking), by session 2"
+fixed_landing=$(head_of "$notesroot")
+git -C "$notesroot" notes --ref=review show "$fixed_landing" >"$tmp/thread"
+grep -Fq '1#1 Repair bug' "$tmp/thread"
+grep -Fqx '# fix fixed-review/2 by unknown, answering review 1' "$tmp/thread"
+grep -Fqx 'fixed: 1#1' "$tmp/thread"
+cmp "$tmp/thread" "$AGENT_RUNS/fixed-review/review-thread.txt"
+if git -C "$notesroot" notes --ref=review show "$before_fix" 2>/dev/null; then exit 1; fi
+if git -C "$notesroot" notes --ref=review show "$after_fix" 2>/dev/null; then exit 1; fi
+# A retry overwrites the note with the same saved text, not changed records.
+jq '.sessions=[]' "$AGENT_RUNS/fixed-review/manifest.json" >"$tmp/changed"
+mv "$tmp/changed" "$AGENT_RUNS/fixed-review/manifest.json"
+printf 'wrong note\n' | git -C "$notesroot" notes --ref=review add -f -F - "$fixed_landing"
+(cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
+git -C "$notesroot" notes --ref=review show "$fixed_landing" >"$tmp/retry"
+cmp "$tmp/thread" "$tmp/retry"
 
 # A landed change without a parsed review must not get an empty review note.
 # Only the review note ref exists, so the push reminder must not mention verdict.
@@ -588,10 +621,10 @@ no_review_tip=$(head_of "$notesroot")
 if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1; then
     echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
 fi
-grep -q 'no parsed review; no review note written' "$tmp/land.log"
+if git -C "$notesroot" show-ref --verify --quiet refs/notes/review; then exit 1; fi
 grep -Fqx 'agent-land > landed agent/no-review; push when ready' "$tmp/land.log"
-! grep -Fq 'git push origin agent/' "$tmp/land.log"
-! grep -q 'then push its notes:' "$tmp/land.log"
+fails grep -Fq 'git push origin agent/' "$tmp/land.log"
+fails grep -q 'then push its notes:' "$tmp/land.log"
 
 # A note failure is advisory only: landing and cleanup are already recorded,
 # and the warning gives a concrete command for retrying the note.
@@ -599,19 +632,42 @@ git -C "$notesroot" switch -q -c agent/note-failure
 commit "$notesroot" plain "note failure"
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/note-failure"
-jq -n --arg repo "$notesroot" '{repo:$repo,sessions:[
+jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$(git -C "$notesroot" rev-parse agent/note-failure)" '{repo:$repo,base:$base,sessions:[
+    {n:0,commits:{".":[$tip]}},
     {n:1,read_only:true,model:"reviewer",started:"2026-10-25T11:00:00Z",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
 ]}' >"$AGENT_RUNS/note-failure/manifest.json"
 if (cd "$notesroot" && NOTE_FAIL=true "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1; then :; else
     echo 'agent-land.test > note failure made landing fatal' >&2; exit 1
 fi
 failed_note_tip=$(head_of "$notesroot")
-[ "$(jq -r '.landed_commit' "$AGENT_RUNS/note-failure/manifest.json")" = "$(git -C "$notesroot" rev-parse "$failed_note_tip^2")" ]
+[ "$(jq -r '.landed_commit' "$AGENT_RUNS/note-failure/manifest.json")" = "$failed_note_tip" ]
 [ -n "$(jq -r '.landed' "$AGENT_RUNS/note-failure/manifest.json")" ]
 [ ! -e "$AGENT_RUNS/note-failure/work" ]
 [ ! -e "$AGENT_RUNS/land-note-failure/work" ]
-grep -q 'warning: could not write review note; retry with:' "$tmp/land.log"
-grep -q 'git -C .* notes --ref=review add --force --file=.*review-note' "$tmp/land.log"
+grep -q 'warning: could not write review thread' "$tmp/land.log"
+if git -C "$notesroot" notes --ref=review show "$failed_note_tip" 2>/dev/null; then exit 1; fi
+cp "$AGENT_RUNS/note-failure/review-thread.txt" "$tmp/saved-thread"
+jq '.sessions=[]' "$AGENT_RUNS/note-failure/manifest.json" >"$tmp/changed"
+mv "$tmp/changed" "$AGENT_RUNS/note-failure/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1
+git -C "$notesroot" notes --ref=review show "$failed_note_tip" >"$tmp/retried-thread"
+cmp "$tmp/saved-thread" "$tmp/retried-thread"
+[ "$(head_of "$notesroot")" = "$failed_note_tip" ]
+[ "$(grep -c '^# review ' "$tmp/retried-thread")" -eq 1 ]
+
+# A workspace load failure must remain visible rather than silently lose reviews.
+git -C "$notesroot" switch -q -c agent/load-failure
+commit "$notesroot" plain 'load failure'
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/load-failure"
+printf '{"repo":"%s"}\n' "$notesroot" >"$AGENT_RUNS/load-failure/manifest.json"
+printf '%s\n' '#!/bin/sh' \
+    'if [ "$*" = "-s .[0] + {sessions: .[1]}" ]; then exit 1; fi' \
+    'exec "$real_jq" "$@"' >"$tmp/bin/jq"
+chmod +x "$tmp/bin/jq"
+(cd "$notesroot" && "$tool/bin/agent-land" load-failure) >"$tmp/land.log" 2>&1
+rm "$tmp/bin/jq"
+grep -Fq 'warning: could not load workspace reviews for landing advisories' "$tmp/land.log"
 
 # Pin-only landing writes the review note on the new root pin commit; the
 # submodule merge still carries the work-session paragraph and trailer.
@@ -627,16 +683,23 @@ git -C "$pinroot/sub" switch -q -c agent/pin-only
 commit "$pinroot/sub" state after
 git -C "$pinroot/sub" switch -q main
 mkdir -p "$AGENT_RUNS/pin-only"
-jq -n --arg repo "$pinroot" '{repo:$repo,sessions:[
+pin_reviewed=$(head_of "$pinroot")
+jq -n --arg repo "$pinroot" --arg tip "$pin_reviewed" '{repo:$repo,base:$tip,sessions:[
     {n:1,read_only:false,closing:"Updated the pinned dependency.\n\nMore detail."},
     {n:2,read_only:true,model:"pin-reviewer",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
 ]}' >"$AGENT_RUNS/pin-only/manifest.json"
 (cd "$pinroot" && "$tool/bin/agent-land" pin-only) >"$tmp/land.log" 2>&1
 pin_commit=$(head_of "$pinroot")
 [ "$(git -C "$pinroot" rev-list --parents -n1 "$pin_commit" | wc -w)" -eq 2 ]
-git -C "$pinroot" notes --ref=review show "$pin_commit" | grep -Fqx '# review: land by pin-reviewer (session 2)'
+# The conversation belongs to the landed root, including pin-only work.
+git -C "$pinroot" notes --ref=review show "$pin_commit" | grep -Fqx '# review pin-only/2: land by pin-reviewer'
+if git -C "$pinroot" notes --ref=review show "$pin_reviewed" 2>/dev/null; then exit 1; fi
 pin_message=$(git -C "$pinroot/sub" show -s --format=%B HEAD)
 printf '%s\n' "$pin_message" | grep -Fqx 'Updated the pinned dependency.'
 printf '%s\n' "$pin_message" | grep -Fqx 'Agent-Workspace: pin-only'
 
+# Missing manifests have the normal diagnostic, never an unguarded jq error.
+mkdir -p "$AGENT_RUNS/no-manifest"
+if "$tool/bin/agent-land" no-manifest >"$tmp/missing.log" 2>&1; then exit 1; fi
+if grep -Fq 'jq: error: Could not open file' "$tmp/missing.log"; then exit 1; fi
 echo "agent-land.test > ok"

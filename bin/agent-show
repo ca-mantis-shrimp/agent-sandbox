@@ -1,0 +1,24 @@
+#!/bin/sh
+# Print a landing's review thread as quickfix-ready text from any directory.
+# Usage: agent-show <workspace|->
+# '-' reads the first tab-separated field of the first stdin line.
+set -eu
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+. "$tool/lib/agent-runs.sh"
+id=$(workspace_id_input "${1:?usage: agent-show <workspace|->}") || exit 2
+case "$id" in ''|.|..|*[!a-zA-Z0-9_-]*) echo 'agent-show > invalid workspace' >&2; exit 2 ;; esac
+run=$(runs_dir)/$id
+repo=$(workspace_repo "$run")
+commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$run/manifest.json")
+{ git -C "$repo" notes --ref=review show "$commit" 2>/dev/null || :; } |
+    jq -Rr --arg repo "$repo" --arg id "$id" '
+        if (test("^(#|fixed:|declined:)") | not) and test("^.+:[0-9]+: ") then
+            capture("^(?<file>.+):(?<rest>[0-9]+: .*)$")
+            | .file |= ltrimstr("/srv/job/" + $id + "/work/")
+            | (if .file | startswith("/") then .file else $repo + "/" + .file end)
+              + ":" + .rest
+        else . end'
+printf '\n# landing: %s\n' "$commit"
+git -C "$repo" show -s --format='%(trailers:only)' "$commit"
+# Read append-only Git notes, not the manifest's latest judgment per judge.
+git -C "$repo" notes --ref=verdict show "$commit" 2>/dev/null || :

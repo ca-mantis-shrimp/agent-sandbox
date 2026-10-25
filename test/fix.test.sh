@@ -38,7 +38,7 @@ printf '%s\n' "$prompt" | grep -qF 'Target: review session ws/10.'
 printf '%s\n' "$prompt" | grep -qF 'Review verdict: land after fixes'
 # The JSON values are preserved, including extra fields and nullable locations.
 findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n```").body | fromjson')
-[ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c '[.findings[] | select(.severity != "nit")]')" ]
+[ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c '[.findings | to_entries[] | .value + {id:("10#" + ((.key+1)|tostring))} | select(.severity != "nit")]')" ]
 # Explicit session, all nits, a multiline note read relative to the caller.
 printf 'Policy: keep behavior.\nAnswer: use existing helper.\n' >"$tmp/note.txt"
 (cd "$tmp"; sh "$fix" ws/2 --nits --note note.txt --harness claude >/dev/null)
@@ -46,7 +46,7 @@ prompt=$(jq -r '.[3]' "$CAPTURE")
 printf '%s\n' "$prompt" | grep -qF 'Target: review session ws/2.'
 printf '%s\n' "$prompt" | grep -qF 'Answer: use existing helper.'
 findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n```").body | fromjson')
-[ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c .findings)" ]
+[ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c '[.findings | to_entries[] | .value + {id:("2#" + ((.key+1)|tostring))}]')" ]
 # Closing-only records use the same parser as agent-result, not a second parser.
 jq -n --arg report "$report" '{n:14,read_only:true,state:"finished",closing:("```json\n"+$report+"\n```")}' \
     >"$AGENT_RUNS/ws/sessions/14.json"
@@ -105,7 +105,7 @@ refuse ws --review "$tmp/review.json" --reviewer ''
 refuse ws --reviewer claude-opus-5-5
 printf '%s\n' "$prompt" | grep -qF 'Answer: use existing helper.'
 findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n```").body | fromjson')
-[ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c .findings)" ]
+[ "$(printf '%s\n' "$findings" | jq -c 'map(del(.id))')" = "$(printf '%s\n' "$report" | jq -c .findings)" ]
 # Invalid, missing, empty and multi-document files never launch, even with a note.
 refuse ws --review "$tmp/missing.json" --reviewer tester
 : >"$tmp/empty.json"

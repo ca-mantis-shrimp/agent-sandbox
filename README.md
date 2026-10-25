@@ -111,7 +111,8 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | add a session | `agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |
 | fix a review | `agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
-| list landings awaiting a human verdict | `agent-verdict --pending` (bash completion offers these ids) |
+| list landings awaiting a human verdict | `agent-verdict --pending` (workspace, repository, label, landed commit; tab-separated) |
+| read a landing's review thread | `agent show <workspace>` or `agent verdict --pending \| fzf \| agent show -` |
 | record the human's or facilitator's judgment | `agent-verdict <workspace> --agree\|--disagree [--by human\|facilitator] [--overrule <text>]... [--missed <text>]... [--note <text>]` (no judgment flag: help, nothing recorded) |
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
@@ -202,9 +203,23 @@ commit or merge conflict is preferable to a garbled action line.
 7. Run `agent-land <workspace>`. Before merging, it checks the harvested branch's test-commit file locks in every repository (see below). It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
 8. Record the human's or facilitator's landing judgment with `agent-verdict`; then push separately.
 
-Landing writes the newest parsed review to `refs/notes/review` on the reviewed commit (the root merge's second parent, or the new root commit for a pin-only landing). Recorded verdicts go to `refs/notes/verdict` on the same commit. A later `agent-verdict` updates the landed commit's verdict note; before landing it only updates the workspace manifest. Review notes contain the report verdict and reviewer, followed by `file:line: severity: what — why` findings, which can be read by quickfix tools. Merge commits include the newest work session's first closing paragraph and an `Agent-Workspace` trailer.
+At landing the host builds the conversation from its session records, in session order, and writes it as one note (`refs/notes/review`) on the landed root commit. Each review starts `# review <workspace>/<n>: <verdict> by <model>`. Each finding has a stable ID, `<review session>#<1-based index>`, and a quickfix line: `file:line: severity: <id> what — why` (or `(approach): ...` without a file). Early findings may refer to lines that later fixes moved.
 
-Read a note with `git notes --ref=review show <commit>` (or `--ref=verdict`). Open review findings in nvim quickfix with `nvim -q <(git notes --ref=review show <commit>)`. Fetch notes with `git fetch origin '+refs/notes/*:refs/notes/*'`; after landing, push them explicitly with `git push origin refs/notes/review refs/notes/verdict`. The sandbox does not change any remote's push configuration.
+`agent-fix` supplies those IDs (without renumbering filtered nits). Its closing report lists `fixed` IDs and `declined` objects with `id` and `why`. Each fix starts `# fix <workspace>/<n> by <model>, answering review <n>`, followed by `fixed: <id>` and `declined: <id> — why` lines. Landing saves the whole text to `$AGENT_RUNS/<workspace>/review-thread.txt` before merging or advancing. Note-write failures warn; rerun `agent-land` after landing to rewrite the same saved text, without rereading session records. There are no per-repository notes or agent-chosen commit anchors. Harvest writes no notes.
+
+The root landing message records the newest review's outcomes as trailers:
+
+- `Finding-Fixed: <id> <what> (<severity>), by session <n>`
+- `Finding-Open: <id> <what> (<severity>)`
+- `Agent-Workspace: <workspace>`
+
+A writer's parsed fix report can mark a finding fixed; Finding-Fixed credits its session, not a commit. An explicit `review_session` link identifies the answered review, including a review file stored in the same second. Legacy fixes without a link must be later sessions, or have a start timestamp at or after the external review's timestamp. IDs match exactly; legacy `what` strings match only exactly and unambiguously, never by prefix or fuzzy similarity. Declined, missing and unmatched findings stay open. This records a fixer's claim, not human approval. For example, `git log --format='%(trailers:key=Finding-Open)'` lists open findings across landings. Submodule merge messages retain the workspace trailer; the root records the overall outcomes. Merge messages also include the newest work session's first closing paragraph.
+
+Recorded verdicts go to `refs/notes/verdict` on the **landed root commit**. A later `agent-verdict` appends a new judgment, preserving earlier judgments; before landing it only updates the workspace manifest. Notes are conversation records, not mutable finding state.
+
+`agent show <workspace>` prints saved reviews and fix reports in session order, then landing trailers and append-only verdict notes. Finding paths resolve to the local checkout, so `nvim -q <(agent show <workspace>)` works from anywhere. Both `agent show -` and `agent verdict - --agree` read the first tab-separated field of the first stdin line, for pipelines from `agent verdict --pending` through a selector.
+
+Read either note with `git notes --ref=review show <landed-commit>` (or `--ref=verdict show <landed-commit>`). Open review findings in nvim quickfix with `nvim -q <(git notes --ref=review show <commit>)`. Fetch notes with `git fetch origin '+refs/notes/*:refs/notes/*'`; after landing, push them explicitly with `git push origin refs/notes/review refs/notes/verdict`. The sandbox does not change any remote's push configuration.
 
 A commit whose subject starts with `Tests:`, `test:`, or `test(<scope>):` locks every file it touches against later commits whose subjects do not start with one of those prefixes on that branch. The prefixes are case-sensitive; `tests:` and `testing:` do not lock files. Landing checks commits since the branch diverged from the real checkout using only Git, with no model call. A later matching test commit may change locked files or lock additional files; it does not forgive an earlier violation. Other commits may change unlocked files. “Later” means a descendant in Git history, not a newer timestamp; deletions and renames count as changes, and merge commits are checked against each parent. Even editing and then restoring a locked file is refused. The refusal names the repository, files, locking commits and violating commits, before any candidate merge or gate. There is no override: repair the branch history and harvest again before retrying.
 

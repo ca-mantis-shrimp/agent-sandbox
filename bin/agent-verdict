@@ -13,7 +13,7 @@ usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
        agent-verdict --pending
 
 Records your judgment of a workspace's review in its manifest.json. After
-landing, it also updates refs/notes/verdict on the landed commit. A later call
+landing, it also appends to refs/notes/verdict on the landed commit. A later call
 replaces that judge's earlier verdict without changing another judge's verdict.
 
   --agree / --disagree  whether you agree with the reviewer's verdict (required)
@@ -22,7 +22,7 @@ replaces that judge's earlier verdict without changing another judge's verdict.
   --note <text>         anything else worth keeping
   --by                  who judges: human (default) or facilitator
   --pending             list landings waiting for your verdict, newest first:
-                        workspace id, repository, label (tab-separated)
+                        workspace id, repository, label, landed commit (tab-separated)
 
 Without --agree or --disagree nothing is recorded.
 HELP
@@ -37,11 +37,11 @@ if [ "$1" = --pending ]; then
         d=${m%/manifest.json}
         jq -r --arg id "${d##*/}" --arg label "$(jq -r '.label // ""' "$d/sessions/1.json" 2>/dev/null)" '
             select(.landed != null and (.landed_commit // "") != "" and .human_verdict == null)
-            | [$id, (.repo // "" | split("/") | last), $label] | @tsv' "$m" 2>/dev/null
+            | [$id, (.repo // "" | split("/") | last), $label, .landed_commit] | @tsv' "$m" 2>/dev/null
     done | sort -r
     exit 0
 fi
-ws=$1
+ws=$(workspace_id_input "$1") || { say 'missing workspace on stdin'; exit 2; }
 shift
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
 by=human agree='' overruled='[]' missed='[]' note=''
@@ -88,7 +88,7 @@ if jq -e '.landed != null' "$tmp" >/dev/null; then
             say "landed commit is unavailable for $ws: $commit"
             exit 1
         }
-        note=$(verdict_note_text <"$tmp")
+        note=$(jq --arg by "$by" '{($by + "_verdict"): .[$by + "_verdict"]}' "$tmp" | verdict_note_text)
         printf '%s\n' "$note" | write_git_note "$repo" verdict "$commit"
     else
         say "landed workspace $ws has no recorded commit; no verdict note was written"
