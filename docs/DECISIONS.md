@@ -40,3 +40,19 @@ write one, cffd8de, listed a blocking finding fixed two sessions later). A recor
 status beside it goes stale. Darrion: "yes on append only conversations but we have to have somewhere for exactly
 this 'what ultimately happened?' ... i dont want to couple too tightly to clearhead so that sandbox can work on
 its own".
+
+## Decision 3: The conversation is one note on the landed commit
+
+Decided on 2026-10-25 by the facilitator, at Darrion's delegation ("you tell me what do we think for the design i
+could go either way"); amends Decision 2. The host writes the whole review conversation at landing as one note
+(refs/notes/review) on the landed commit, from the session records it holds: each review with its findings and
+their ids, each fix report with the ids it fixed or declined, in session order. Verdicts append to
+refs/notes/verdict on the same commit. The merge trailers name outcomes without commit hashes:
+`Finding-Fixed: <id> <what> (<severity>), by session <n>`, `Finding-Open: <id> <what> (<severity>)`. Records are
+still append-only and finding state is still derived; only "each record on the commit it is about" is dropped.
+
+Why: anchoring each record on its own commit meant deciding which commit from what agents recorded, which then had
+to be validated (an agent could otherwise attach permanent, pushed notes to any commit), and the validation grew
+past what Darrion can review. The anchoring bought exact line numbers on a commit nobody checks out: a landing is
+reviewed at the landed code, and the review that says "land" usually read it. One host-chosen commit has nothing
+to forge. Cost: a finding from an early review points at lines that later fixes may have moved.
