@@ -58,13 +58,30 @@ def finding_trailers:
   | if $fix == null then "Finding-Open: \($f.id) \($f.what | one_line) (\($f.severity))"
     else "Finding-Fixed: \($f.id) \($fix.commit[0:7]) \($f.what | one_line) (\($f.severity))" end;
 
-# Each row is an immutable record on the commit it describes. Missing legacy
-# anchors are not guessed from the branch tip (which may include later fixes).
+# Intersect attribution with S, in host rev-list order (not agent array order).
+# Keep only the newest produced commit per repo, shared by fix notes/trailers.
+def host_review_workspace($sets):
+  . as $raw
+  | .sessions = [(.sessions // [])[] | . as $s
+      | .commits = ($sets | with_entries(.key as $path
+          | .value |= map(select(. as $sha | any($s.commits[$path][]?; . == $sha))))
+          | with_entries(select(.value | length > 0))) ] | .sessions |= sort_by(.n)
+  | .ignored_commits = any($raw.sessions[]?.commits // {} | to_entries[];
+      .key as $path | any(.value[]; . as $sha | all($sets[$path][]?; . != $sha)))
+  | . as $w
+  | .sessions |= map(. as $s
+      | .review_anchors = ($sets | with_entries(.key as $path
+          | .value |= map(select(. as $sha | any($w.sessions[];
+              .read_only != true and .n < $s.n and any(.commits[$path][]?; . == $sha))))
+          | .value = .value[0]) | with_entries(select(.value != null)))
+      | .commits |= with_entries(.value = .value[0:1]));
+
+# Rows are projected once before landing, then retained by the host for retries.
 def review_thread_records:
   . as $w
   | (.sessions[]? as $s
      | if ($s.review | valid_review_report) then
-         ($s.head_at_start // {} | to_entries[]) as $head
+         ($s.review_anchors // {} | to_entries[]) as $head
          | {path: $head.key, commit: $head.value,
             text: ((["# review: \($s.review.verdict) by \($s.model // "unknown") (\($w.id // "workspace")/\($s.n))"]
               + [$s.review | identified_findings($s.n | tostring)
