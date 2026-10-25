@@ -51,6 +51,8 @@ printf '%s\n' '#!/bin/sh' \
     'case "$*" in' \
     '  *"update-ref refs/agent/candidate/interrupted/base"*)' \
     '    if [ "${INTERRUPT_RECORDING:-false}" = true ]; then exit 1; fi ;;' \
+    '  *"notes --ref=review add"*)' \
+    '    if [ "${NOTE_FAIL:-false}" = true ]; then exit 1; fi ;;' \
     '  *"branch -q -d"*)' \
     '    gl="$XDG_RUNTIME_DIR/agent-sandbox/land-green.lock"' \
     '    if [ -f "$gl" ]; then' \
@@ -454,5 +456,110 @@ commit "$root" ordinary changed
 git -C "$root" switch -q main
 land lock-prefix
 [ "$(cat "$root/ordinary")" = changed ]
+
+# --- review and verdict notes travel with landed commits ----------------------
+
+notesroot="$tmp/notes-root"
+git init -q -b main "$notesroot"
+sandboxed "$notesroot"
+git -C "$notesroot" switch -q -c agent/with-review
+commit "$notesroot" change reviewed
+reviewed_tip=$(head_of "$notesroot")
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/with-review"
+jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
+    {n:1,read_only:false,closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
+    {n:2,read_only:true,model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
+        {severity:"nit",file:"old",line:4,what:"Old review",why:"Not newest."}],coverage:[],for_human:[]}},
+    {n:3,read_only:true,model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
+        {severity:"should-fix",file:"change",line:null,what:"Handle\n  this",why:"It can\n fail."},
+        {severity:"nit",file:null,line:null,what:"Simplify\n this",why:"Less   code."}],coverage:[],for_human:[]}}
+], human_verdict:{agrees_with_review:true,overruled:["false\n alarm"],missed:["missed\n bug"],note:"checked\n carefully",at:"2026-10-25T10:00:00Z"}}' >"$AGENT_RUNS/with-review/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" with-review) >"$tmp/land.log" 2>&1
+root_merge=$(head_of "$notesroot")
+review_target=$(git -C "$notesroot" rev-parse "$root_merge^2")
+[ "$review_target" = "$reviewed_tip" ]
+git -C "$notesroot" notes --ref=review show "$review_target" >"$tmp/review-note"
+[ "$(sed -n 1p "$tmp/review-note")" = '# review: land after fixes by reviewer-model (session 3)' ]
+grep -Fqx 'change:1: should-fix: Handle this — It can fail.' "$tmp/review-note"
+grep -Fqx '(approach): nit: Simplify this — Less code.' "$tmp/review-note"
+! grep -Fq 'Old review' "$tmp/review-note"
+git -C "$notesroot" notes --ref=verdict show "$review_target" >"$tmp/verdict-note"
+grep -Fqx '# verdict: human agrees with the review (2026-10-25T10:00:00Z)' "$tmp/verdict-note"
+grep -Fqx 'overruled: false alarm' "$tmp/verdict-note"
+grep -Fqx 'missed: missed bug' "$tmp/verdict-note"
+grep -Fqx 'note: checked carefully' "$tmp/verdict-note"
+message=$(git -C "$notesroot" show -s --format=%B "$root_merge")
+printf '%s\n' "$message" | grep -Fqx 'Implemented the reviewed change.'
+printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
+! printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'
+grep -Fqx 'agent-land > landed agent/with-review; push when ready' "$tmp/land.log"
+! grep -Fq 'git push origin agent/' "$tmp/land.log"
+grep -q 'agent-land > then push its notes: git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
+
+# A landed change without a parsed review must not get an empty review note.
+# Only the review note ref exists, so the push reminder must not mention verdict.
+git -C "$notesroot" update-ref -d refs/notes/review
+git -C "$notesroot" update-ref -d refs/notes/verdict
+git -C "$notesroot" switch -q -c agent/no-review
+commit "$notesroot" plain plain
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/no-review"
+printf '{"repo":"%s"}\n' "$notesroot" >"$AGENT_RUNS/no-review/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" no-review) >"$tmp/land.log" 2>&1
+no_review_tip=$(head_of "$notesroot")
+if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1; then
+    echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
+fi
+grep -q 'no parsed review; no review note written' "$tmp/land.log"
+grep -Fqx 'agent-land > landed agent/no-review; push when ready' "$tmp/land.log"
+! grep -Fq 'git push origin agent/' "$tmp/land.log"
+! grep -q 'then push its notes:' "$tmp/land.log"
+
+# A note failure is advisory only: landing and cleanup are already recorded,
+# and the warning gives a concrete command for retrying the note.
+git -C "$notesroot" switch -q -c agent/note-failure
+commit "$notesroot" plain "note failure"
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/note-failure"
+jq -n --arg repo "$notesroot" '{repo:$repo,sessions:[
+    {n:1,read_only:true,model:"reviewer",started:"2026-10-25T11:00:00Z",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
+]}' >"$AGENT_RUNS/note-failure/manifest.json"
+if (cd "$notesroot" && NOTE_FAIL=true "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1; then :; else
+    echo 'agent-land.test > note failure made landing fatal' >&2; exit 1
+fi
+failed_note_tip=$(head_of "$notesroot")
+[ "$(jq -r '.landed_commit' "$AGENT_RUNS/note-failure/manifest.json")" = "$(git -C "$notesroot" rev-parse "$failed_note_tip^2")" ]
+[ -n "$(jq -r '.landed' "$AGENT_RUNS/note-failure/manifest.json")" ]
+[ ! -e "$AGENT_RUNS/note-failure/work" ]
+[ ! -e "$AGENT_RUNS/land-note-failure/work" ]
+grep -q 'warning: could not write review note; retry with:' "$tmp/land.log"
+grep -q 'git -C .* notes --ref=review add --force --file=.*review-note' "$tmp/land.log"
+
+# Pin-only landing writes the review note on the new root pin commit; the
+# submodule merge still carries the work-session paragraph and trailer.
+pin_sub="$tmp/pin-sub"
+pinroot="$tmp/pin-root"
+git init -q -b main "$pin_sub"
+commit "$pin_sub" state before
+git init -q -b main "$pinroot"
+git -C "$pinroot" -c protocol.file.allow=always submodule -q add "$pin_sub" sub
+sandboxed "$pinroot"
+git -C "$pinroot/sub" switch -q main
+git -C "$pinroot/sub" switch -q -c agent/pin-only
+commit "$pinroot/sub" state after
+git -C "$pinroot/sub" switch -q main
+mkdir -p "$AGENT_RUNS/pin-only"
+jq -n --arg repo "$pinroot" '{repo:$repo,sessions:[
+    {n:1,read_only:false,closing:"Updated the pinned dependency.\n\nMore detail."},
+    {n:2,read_only:true,model:"pin-reviewer",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
+]}' >"$AGENT_RUNS/pin-only/manifest.json"
+(cd "$pinroot" && "$tool/bin/agent-land" pin-only) >"$tmp/land.log" 2>&1
+pin_commit=$(head_of "$pinroot")
+[ "$(git -C "$pinroot" rev-list --parents -n1 "$pin_commit" | wc -w)" -eq 2 ]
+git -C "$pinroot" notes --ref=review show "$pin_commit" | grep -Fqx '# review: land by pin-reviewer (session 2)'
+pin_message=$(git -C "$pinroot/sub" show -s --format=%B HEAD)
+printf '%s\n' "$pin_message" | grep -Fqx 'Updated the pinned dependency.'
+printf '%s\n' "$pin_message" | grep -Fqx 'Agent-Workspace: pin-only'
 
 echo "agent-land.test > ok"

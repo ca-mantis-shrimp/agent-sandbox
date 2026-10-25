@@ -90,4 +90,39 @@ rm "$AGENT_RUNS/ws/sessions/1.json"
 printf '{"sessions":[{"review":{"unparsed":true}}]}\n' >"$manifest"
 human_verdict_reminder ws "$(workspace_json "$AGENT_RUNS/ws")" 2>"$tmp/reminder"
 grep -qF 'agent-verdict ws --agree|--disagree' "$tmp/reminder"
+# Before landing the verdict stays only in the manifest; afterward it is
+# mirrored into a git note and a second judge updates only their own lines.
+repo="$tmp/noted-repo"
+git init -q -b main "$repo"
+printf 'base\n' >"$repo/file"
+git -C "$repo" add file
+git -C "$repo" commit -q -m base
+landed_commit=$(git -C "$repo" rev-parse HEAD)
+jq -n --arg repo "$repo" '{repo:$repo,landed:"yesterday"}' >"$manifest"
+sh "$verdict" ws --agree --overrule 'legacy finding' >/dev/null 2>"$tmp/err"
+jq -e '.human_verdict.overruled == ["legacy finding"] and .landed_commit == null' "$manifest" >/dev/null
+grep -Fq 'landed workspace ws has no recorded commit; no verdict note was written' "$tmp/err"
+if git -C "$repo" notes --ref=verdict show "$landed_commit" >/dev/null 2>&1; then
+    echo 'agent-verdict.test > wrote a note for a legacy landing without a commit' >&2; exit 1
+fi
+jq -n --arg repo "$repo" '{repo:$repo}' >"$manifest"
+sh "$verdict" ws --agree --overrule 'first finding' --note 'human note' >/dev/null 2>"$tmp/err"
+if git -C "$repo" notes --ref=verdict show "$landed_commit" >/dev/null 2>&1; then
+    echo 'agent-verdict.test > wrote a note before landing' >&2; exit 1
+fi
+jq --arg commit "$landed_commit" '.landed="2026-10-25T10:00:00Z" | .landed_commit=$commit' \
+    "$manifest" >"$tmp/landed-manifest"
+mv "$tmp/landed-manifest" "$manifest"
+sh "$verdict" ws --agree --overrule 'first finding' --note 'human note' >/dev/null 2>"$tmp/err"
+git -C "$repo" notes --ref=verdict show "$landed_commit" >"$tmp/verdict-note"
+grep -Fqx '# verdict: human agrees with the review ('"$(jq -r .human_verdict.at "$manifest")"')' "$tmp/verdict-note"
+grep -Fqx 'overruled: first finding' "$tmp/verdict-note"
+grep -Fqx 'note: human note' "$tmp/verdict-note"
+sh "$verdict" ws --by facilitator --disagree --missed 'facilitator miss' >/dev/null 2>"$tmp/err"
+git -C "$repo" notes --ref=verdict show "$landed_commit" >"$tmp/verdict-note"
+grep -Fqx '# verdict: human agrees with the review ('"$(jq -r .human_verdict.at "$manifest")"')' "$tmp/verdict-note"
+grep -Fqx '# verdict: facilitator disagrees with the review ('"$(jq -r .facilitator_verdict.at "$manifest")"')' "$tmp/verdict-note"
+grep -Fqx 'overruled: first finding' "$tmp/verdict-note"
+grep -Fqx 'missed: facilitator miss' "$tmp/verdict-note"
+grep -Fqx 'note: human note' "$tmp/verdict-note"
 echo 'agent-verdict.test > ok'
