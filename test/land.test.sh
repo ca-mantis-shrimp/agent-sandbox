@@ -545,7 +545,7 @@ reviewed_tip=$(head_of "$notesroot")
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/with-review"
 jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$reviewed_tip" '{repo:$repo, base:$base, sessions:[
-    {n:1,read_only:false,closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
+    {n:1,read_only:false,commits:{".":[$tip]},closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
     {n:2,read_only:true,head_at_start:{".":$tip},model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
         {severity:"nit",file:"old",line:4,what:"Old review",why:"Not newest."}],coverage:[],for_human:[]}},
     {n:3,read_only:true,head_at_start:{".":$tip},model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
@@ -585,7 +585,8 @@ after_fix=$(head_of "$notesroot")
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/fixed-review"
 jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg before "$before_fix" --arg after "$after_fix" '{repo:$repo,base:$base,sessions:[
- {n:1,read_only:true,model:"reviewer",head_at_start:{".":$before},review:{verdict:"land after fixes",coverage:[],for_human:[],findings:[{file:"bug",line:1,severity:"blocking",what:"Repair bug",why:"Fails"}]}},
+ {n:0,commits:{".":[$before]}},
+ {n:1,read_only:true,model:"reviewer",review:{verdict:"land after fixes",coverage:[],for_human:[],findings:[{file:"bug",line:1,severity:"blocking",what:"Repair bug",why:"Fails"}]}},
  {n:2,read_only:false,review_session:"1",commits:{".":[$after]},closing:"```json\n{\"fixed\":[\"1#1\"],\"declined\":[]}\n```"}
 ]}' >"$AGENT_RUNS/fixed-review/manifest.json"
 (cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
@@ -593,6 +594,12 @@ git -C "$notesroot" log -1 --format='%(trailers:key=Finding-Fixed,valueonly)' |
  grep -Fqx "1#1 $(printf %.7s "$after_fix") Repair bug (blocking)"
 git -C "$notesroot" notes --ref=review show "$before_fix" | grep -Fq '1#1 Repair bug'
 git -C "$notesroot" notes --ref=review show "$after_fix" | grep -Fq 'answers review: 1'
+(cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
+[ "$(git -C "$notesroot" notes --ref=review show "$before_fix" | grep -c '^# review:')" -eq 1 ]
+[ "$(wc -l <"$AGENT_RUNS/fixed-review/review-thread.jsonl")" -eq 2 ]
+# Changing agent records after landing cannot redirect the retry.
+jq --arg sha "$root_merge" '.sessions[0].commits={".":[$sha]}' "$AGENT_RUNS/fixed-review/manifest.json" >"$tmp/changed"
+mv "$tmp/changed" "$AGENT_RUNS/fixed-review/manifest.json"
 (cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
 [ "$(git -C "$notesroot" notes --ref=review show "$before_fix" | grep -c '^# review:')" -eq 1 ]
 
@@ -622,7 +629,8 @@ commit "$notesroot" plain "note failure"
 git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/note-failure"
 jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$(git -C "$notesroot" rev-parse agent/note-failure)" '{repo:$repo,base:$base,sessions:[
-    {n:1,read_only:true,head_at_start:{".":$tip},model:"reviewer",started:"2026-10-25T11:00:00Z",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
+    {n:0,commits:{".":[$tip]}},
+    {n:1,read_only:true,model:"reviewer",started:"2026-10-25T11:00:00Z",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
 ]}' >"$AGENT_RUNS/note-failure/manifest.json"
 if (cd "$notesroot" && NOTE_FAIL=true "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1; then :; else
     echo 'agent-land.test > note failure made landing fatal' >&2; exit 1
