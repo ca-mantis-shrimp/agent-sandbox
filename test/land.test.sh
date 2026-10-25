@@ -556,8 +556,8 @@ jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$r
 root_merge=$(head_of "$notesroot")
 review_target=$(git -C "$notesroot" rev-parse "$root_merge^2")
 [ "$review_target" = "$reviewed_tip" ]
-git -C "$notesroot" notes --ref=review show "$review_target" >"$tmp/review-note"
-grep -Fqx '# review: land after fixes by reviewer-model (with-review/3)' "$tmp/review-note"
+git -C "$notesroot" notes --ref=review show "$root_merge" >"$tmp/review-note"
+grep -Fqx '# review with-review/3: land after fixes by reviewer-model' "$tmp/review-note"
 grep -Fqx 'change:1: should-fix: 3#1 Handle this — It can fail.' "$tmp/review-note"
 grep -Fqx '(approach): nit: 3#2 Simplify this — Less code.' "$tmp/review-note"
 grep -Fq '2#1 Old review' "$tmp/review-note"
@@ -575,8 +575,7 @@ grep -Fqx 'agent-land > landed agent/with-review; push when ready' "$tmp/land.lo
 fails grep -Fq 'git push origin agent/' "$tmp/land.log"
 grep -q 'agent-land > then push its notes: git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
 
-# A fix round moves the branch tip, not the review's anchor. The root merge
-# cites the fixing commit, and repeated landing retries do not duplicate notes.
+# A fix round is part of the same landed conversation; trailers credit its session.
 git -C "$notesroot" switch -q -c agent/fixed-review
 commit "$notesroot" bug introduced
 before_fix=$(head_of "$notesroot")
@@ -591,17 +590,22 @@ jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg before 
 ]}' >"$AGENT_RUNS/fixed-review/manifest.json"
 (cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
 git -C "$notesroot" log -1 --format='%(trailers:key=Finding-Fixed,valueonly)' |
- grep -Fqx "1#1 $(printf %.7s "$after_fix") Repair bug (blocking)"
-git -C "$notesroot" notes --ref=review show "$before_fix" | grep -Fq '1#1 Repair bug'
-git -C "$notesroot" notes --ref=review show "$after_fix" | grep -Fq 'answers review: 1'
-(cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
-[ "$(git -C "$notesroot" notes --ref=review show "$before_fix" | grep -c '^# review:')" -eq 1 ]
-[ "$(wc -l <"$AGENT_RUNS/fixed-review/review-thread.jsonl")" -eq 2 ]
-# Changing agent records after landing cannot redirect the retry.
-jq --arg sha "$root_merge" '.sessions[0].commits={".":[$sha]}' "$AGENT_RUNS/fixed-review/manifest.json" >"$tmp/changed"
+ grep -Fqx "1#1 Repair bug (blocking), by session 2"
+fixed_landing=$(head_of "$notesroot")
+git -C "$notesroot" notes --ref=review show "$fixed_landing" >"$tmp/thread"
+grep -Fq '1#1 Repair bug' "$tmp/thread"
+grep -Fqx '# fix fixed-review/2 by unknown, answering review 1' "$tmp/thread"
+grep -Fqx 'fixed: 1#1' "$tmp/thread"
+cmp "$tmp/thread" "$AGENT_RUNS/fixed-review/review-thread.txt"
+if git -C "$notesroot" notes --ref=review show "$before_fix" 2>/dev/null; then exit 1; fi
+if git -C "$notesroot" notes --ref=review show "$after_fix" 2>/dev/null; then exit 1; fi
+# A retry overwrites the note with the same saved text, not changed records.
+jq '.sessions=[]' "$AGENT_RUNS/fixed-review/manifest.json" >"$tmp/changed"
 mv "$tmp/changed" "$AGENT_RUNS/fixed-review/manifest.json"
+printf 'wrong note\n' | git -C "$notesroot" notes --ref=review add -f -F - "$fixed_landing"
 (cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
-[ "$(git -C "$notesroot" notes --ref=review show "$before_fix" | grep -c '^# review:')" -eq 1 ]
+git -C "$notesroot" notes --ref=review show "$fixed_landing" >"$tmp/retry"
+cmp "$tmp/thread" "$tmp/retry"
 
 # A landed change without a parsed review must not get an empty review note.
 # Only the review note ref exists, so the push reminder must not mention verdict.
@@ -664,7 +668,8 @@ jq -n --arg repo "$pinroot" --arg tip "$pin_reviewed" '{repo:$repo,base:$tip,ses
 (cd "$pinroot" && "$tool/bin/agent-land" pin-only) >"$tmp/land.log" 2>&1
 pin_commit=$(head_of "$pinroot")
 [ "$(git -C "$pinroot" rev-list --parents -n1 "$pin_commit" | wc -w)" -eq 2 ]
-# The unchanged root at review start is the workspace base, not its work.
+# The conversation belongs to the landed root, including pin-only work.
+git -C "$pinroot" notes --ref=review show "$pin_commit" | grep -Fqx '# review pin-only/2: land by pin-reviewer'
 if git -C "$pinroot" notes --ref=review show "$pin_reviewed" 2>/dev/null; then exit 1; fi
 pin_message=$(git -C "$pinroot/sub" show -s --format=%B HEAD)
 printf '%s\n' "$pin_message" | grep -Fqx 'Updated the pinned dependency.'
