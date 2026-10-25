@@ -153,9 +153,10 @@ review_note_text() { # stdin: workspace JSON; empty when no parsed review
         [workspace_reviews | select(.review | valid_review_report)] | sort_by(.at // "") | last as $r
         | if $r == null then empty else
             (["# review: \($r.review.verdict) by \($r.reviewer // "unknown") (\($r.source))"]
-             + [$r.review.findings[]? | if .file == null then
-                    "(approach): \(.severity): \(.what) — \(.why)"
-                else "\(.file):\(.line // "-"): \(.severity): \(.what) — \(.why)" end])
+             + [$r.review.findings[]? | def one_line: gsub("[[:space:]]+"; " ");
+                if .file == null then
+                    "(approach): \(.severity): \(.what | one_line) — \(.why | one_line)"
+                else "\(.file):\(.line // 1): \(.severity): \(.what | one_line) — \(.why | one_line)" end])
             | join("\n")
           end'
 }
