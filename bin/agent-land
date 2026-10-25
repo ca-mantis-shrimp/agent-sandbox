@@ -63,6 +63,12 @@ stop() {
     say "$*"
     exit 1
 }
+if [ -n "$(jq -r '.landed // empty' "$run/manifest.json")" ]; then
+    workspace=$(workspace_json "$run" | jq --arg id "$id" '.id = (.id // $id)')
+    write_review_thread "$repo" "$workspace" || stop "could not retry review thread"
+    say "already landed; review thread saved"
+    exit 0
+fi
 name() { # <repo path relative to the repo>
     if [ "$1" = . ]; then basename "$repo"; else printf '%s\n' "$1"; fi
 }
@@ -197,6 +203,9 @@ commit_with_workspace_message() { # <repo> <title>
         printf '%s\n\n' "$2"
         [ -z "$work_closing" ] || printf '%s\n\n' "$work_closing"
         printf 'Agent-Workspace: %s\n' "$id"
+        if [ "$1" = "$cand" ] && [ -n "$finding_trailers" ]; then
+            printf '%s\n' "$finding_trailers"
+        fi
     } | git -C "$1" commit -q -F -
 }
 
@@ -308,7 +317,7 @@ cleanup() {
 # The human can record reconciliation on the finding in the session record.
 workspace='{}'
 if [ -f "$run/manifest.json" ]; then
-    if workspace=$(workspace_json "$run"); then
+    if workspace=$(workspace_json "$run" | jq --arg id "$id" '.id = (.id // $id)'); then
         printf '%s\n' "$workspace" | jq -r -L "$tool/lib" '
             include "agent-review"; blocking_review_lines' >&2 ||
             say "warning: could not display blocking review findings"
@@ -322,6 +331,7 @@ work_closing=$(printf '%s\n' "$workspace" | jq -r '
      | if length == 0 then "" else max_by(.n // 0).closing end)
     | if . == "" then "" else split("\n\n")[0] end
     | gsub("^[\r\n]+|[\r\n]+$"; "")')
+finding_trailers=$(printf '%s\n' "$workspace" | jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers')
 check_harvested
 # Check all harvested repos before even merging a submodule into the candidate.
 for sm in . $submodules; do
@@ -354,38 +364,31 @@ for sm in . $submodules; do
 done
 check_current true
 gate_candidate
-review_note=$(printf '%s\n' "$workspace" | review_note_text) || review_note=
 verdict_note=$(printf '%s\n' "$workspace" | verdict_note_text) || verdict_note=
 advance
 root_tip=$(git -C "$repo" rev-parse "$checkpoint/tip")
-if landing_note_parent=$(git -C "$repo" rev-parse --verify "$root_tip^2" 2>/dev/null) &&
-    branch_tip=$(git -C "$repo" rev-parse --verify "$branch" 2>/dev/null) &&
-    [ "$landing_note_parent" = "$branch_tip" ]; then
-    landing_note_commit=$landing_note_parent
-else
-    landing_note_commit=$root_tip
-fi
+landing_note_commit=$root_tip
 cleanup
 write_landing_note() { # <ref>
     note_ref=$1
-    case "$note_ref" in review) note_content=$review_note ;; verdict) note_content=$verdict_note ;; esac
+    note_content=$verdict_note
     [ -n "$note_content" ] || return 0
     note_file="$run/$note_ref-note.txt"
     if ! printf '%s\n' "$note_content" >"$note_file"; then
-        say "warning: could not prepare $note_ref note; retry by saving its text to $note_file, then run: git -C \"$repo\" notes --ref=$note_ref add --force --file=\"$note_file\" $landing_note_commit"
+        say "warning: could not prepare $note_ref note; retry by saving its text to $note_file, then run: git -C \"$repo\" notes --ref=$note_ref append --file=\"$note_file\" $landing_note_commit"
         return 0
     fi
-    if git -C "$repo" notes --ref="$note_ref" add --force --file="$note_file" "$landing_note_commit"; then
+    if git -C "$repo" notes --ref="$note_ref" append --file="$note_file" "$landing_note_commit"; then
         rm -f "$note_file"
         say "wrote $note_ref note on $landing_note_commit"
     else
-        say "warning: could not write $note_ref note; retry with: git -C \"$repo\" notes --ref=$note_ref add --force --file=\"$note_file\" $landing_note_commit"
+        say "warning: could not write $note_ref note; retry with: git -C \"$repo\" notes --ref=$note_ref append --file=\"$note_file\" $landing_note_commit"
     fi
 }
-if [ -n "$review_note" ]; then
-    write_landing_note review
-else
-    say "no parsed review; no review note written"
+# Every review/fix stays on its own anchor, not the final branch tip. Retained
+# session records allow an idempotent retry after an advisory note-write failure.
+if ! write_review_thread "$repo" "$workspace"; then
+    say "warning: could not write review thread; rerun agent-land $id to retry from retained records"
 fi
 if [ -n "$verdict_note" ]; then
     write_landing_note verdict

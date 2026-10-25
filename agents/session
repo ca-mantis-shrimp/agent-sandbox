@@ -63,6 +63,15 @@ session_usd=${AGENT_SESSION_USD:-3}
 log="$job/transcripts/$n.jsonl"
 
 cd "$job/work"
+# Capture the actual snapshot before setup or model tools can change it. This
+# runs inside the sandbox: the host never invokes Git in a workspace clone.
+heads=$(
+    git rev-parse HEAD | jq -R '{".": .}'
+    git submodule --quiet foreach --recursive 'git rev-parse HEAD | jq -R --arg path "$displaypath" "{(\$path): .}"'
+)
+heads=$(printf '%s\n' "$heads" | jq -s 'add')
+jq --argjson heads "$heads" '.head_at_start = $heads' "$record" >"/tmp/session-$n-start.json"
+cp "/tmp/session-$n-start.json" "$record"
 readonly=$(jq -r '.read_only // false' "$record")
 if [ "$readonly" != true ]; then
     # A separate shell preserves errexit inside the exporter. Never let export

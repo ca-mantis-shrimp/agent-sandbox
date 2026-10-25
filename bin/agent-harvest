@@ -73,6 +73,13 @@ repo_paths "$repo" | while IFS= read -r path; do
         echo '    UNCOMMITTED in the run (not harvested)'
 done
 
+# The objects now exist in host repositories: save the conversation there
+# before a landing, without ever running Git in the agent-writable clone.
+workspace=$(workspace_json "$run" | jq --arg id "$id" '.id = (.id // $id)')
+if ! write_review_thread "$repo" "$workspace"; then
+    echo "agent-harvest > warning: could not write review thread; harvest again to retry" >&2
+fi
+
 # Each session, in order: who worked, how it ended, what it said. (Manifests
 # from before sessions had their own records call the closing message "why".)
 workspace_json "$run" | jq -r -L "$tool/lib" 'include "agent-review";

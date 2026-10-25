@@ -4,8 +4,10 @@ This is one headless session; finish the task and end the session. Address each 
 
 Commit tests first, with a subject starting `test:` or `test(<scope>):`; `Tests:` is supported for legacy commits. A test commit locks every file it touches: later non-test commits must not touch files an earlier test commit touched.
 
+Use the finding IDs supplied in the prompt (`<review session>#<1-based index>`), not their text. Preserve IDs exactly, including for nits; do not renumber filtered findings. A fixed entry claims that your committed change addresses that finding; declined entries explain why you left it open.
+
 End your closing message with a fenced `json` block in exactly this shape, listing every finding as fixed or declined:
 
 ```json
-{"fixed": ["what"], "declined": [{"what": "what", "why": "reason"}]}
+{"fixed": ["<id>"], "declined": [{"id": "<id>", "why": "reason"}]}
 ```

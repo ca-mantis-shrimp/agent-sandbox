@@ -53,7 +53,8 @@ else
     printf '%s\n' "$record" | jq -e -L "$tool/lib" 'include "agent-review"; .review | valid_review_report' >/dev/null ||
         { say "session $ref has no review or its review is unparsed"; exit 1; }
     review=$(printf '%s\n' "$record" | jq -c .review)
-    target="review session $ws/$(printf '%s\n' "$record" | jq -r .n)"
+    review_id=$(printf '%s\n' "$record" | jq -r .n)
+    target="review session $ws/$review_id"
 fi
 if [ -f "$note" ]; then note=$(cat "$note"); fi
 # Nits alone never authorize a fix; a note can authorize a nit-only session.
@@ -70,15 +71,17 @@ if [ -n "$review_file" ]; then
         '{id:$id, reviewer:$reviewer, file:$file, at:$at, review:$review}' >"$stored"
     mv "$stored" "$stored.json"
     trap - EXIT
+    review_id=$id
     target="review file reviews/$id.json in workspace $ws (reviewer: $reviewer)"
 fi
-prompt=$(printf '%s\n' "$review" | jq -r --arg target "$target" --arg note "$note" --argjson nits "$nits" '
+prompt=$(printf '%s\n' "$review" | jq -r --arg target "$target" --arg note "$note" --argjson nits "$nits" --arg review_id "$review_id" '
     "Run kind: fix. Target: \($target).\n\n" +
     "Review verdict: \(.verdict)\n\nFindings (verbatim JSON objects):\n```json\n" +
-    ([.findings[] | select(.severity == "blocking" or .severity == "should-fix" or $nits)] | tojson) +
+    ([.findings | to_entries[] | .value + {id: ($review_id + "#" + ((.key + 1) | tostring))}
+      | select(.severity == "blocking" or .severity == "should-fix" or $nits)] | tojson) +
     "\n```\n\nNote (human/orchestrator decisions and answers):\n" + $note')
 set -- --in "$ws" --prompt "$prompt"
 [ -z "$harness" ] || set -- "$@" --harness "$harness"
 [ -z "$model" ] || set -- "$@" --model "$model"
 [ "$wait" -eq 0 ] || set -- "$@" --wait
-exec "$tool/bin/agent-run" "$@"
+AGENT_REVIEW_SESSION=$review_id exec "$tool/bin/agent-run" "$@"

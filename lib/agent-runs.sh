@@ -146,21 +146,7 @@ human_verdict_reminder() { # <workspace-id> <workspace-json>
         | "agent-land > review has no human verdict; say whether you agree with the review: agent-verdict \($ws) --agree|--disagree"' >&2
 }
 
-# Serialize parsed review and verdict records into repository-local Git notes.
-review_note_text() { # stdin: workspace JSON; empty when no parsed review
-    jq -r -L "$tool/lib" '
-        include "agent-review";
-        [workspace_reviews | select(.review | valid_review_report)] | sort_by(.at // "") | last as $r
-        | if $r == null then empty else
-            (["# review: \($r.review.verdict) by \($r.reviewer // "unknown") (\($r.source))"]
-             + [$r.review.findings[]? | def one_line: gsub("[[:space:]]+"; " ");
-                if .file == null then
-                    "(approach): \(.severity): \(.what | one_line) — \(.why | one_line)"
-                else "\(.file):\(.line // 1): \(.severity): \(.what | one_line) — \(.why | one_line)" end])
-            | join("\n")
-          end'
-}
-
+# Serialize verdict records into repository-local Git notes.
 verdict_note_text() { # stdin: workspace JSON; one ordered block per recorded judge
     jq -r '
         def one_line: gsub("[[:space:]]+"; " ");
@@ -174,9 +160,33 @@ verdict_note_text() { # stdin: workspace JSON; one ordered block per recorded ju
         judge_lines("human") + judge_lines("facilitator") | join("\n")'
 }
 
-write_git_note() { # <repo> <note-ref> <commit>; note content on stdin
-    git -C "$1" notes --ref="refs/notes/$2" add --force --file=- "$3"
+write_git_note() { # <repo> <note-ref> <commit>; append a verdict record
+    git -C "$1" notes --ref="refs/notes/$2" append --file=- "$3"
 }
+
+write_review_thread() ( # <real-repo> <workspace-json>; harvested commits only
+    thread_repo=$1
+    thread_paths=$(repo_paths "$thread_repo") || return 1
+    thread_rows=$(printf '%s\n' "$2" | jq -c -L "$tool/lib" 'include "agent-review"; review_thread_records') || return 1
+    [ -n "$thread_rows" ] || return 0
+    printf '%s\n' "$thread_rows" | while IFS= read -r row; do
+        path=$(printf '%s\n' "$row" | jq -r .path)
+        commit=$(printf '%s\n' "$row" | jq -r .commit)
+        text=$(printf '%s\n' "$row" | jq -r .text)
+        header=$(printf '%s\n' "$text" | head -n 1)
+        # Paths in agent-writable records are not authority to visit another
+        # checkout (especially a workspace). Only host-declared repo paths count.
+        printf '%s\n' "$thread_paths" | grep -Fqx -- "$path" || return 1
+        [ -d "$thread_repo/$path" ] || return 1
+        printf '%s\n' "$commit" | grep -Eq '^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$' || return 1
+        git -C "$thread_repo/$path" cat-file -e "$commit^{commit}" || return 1
+        existing=$(git -C "$thread_repo/$path" notes --ref=review show "$commit" 2>/dev/null) || existing=
+        if printf '%s\n' "$existing" | grep -Fqx "$header"; then continue; fi
+        if [ -z "$existing" ]; then action=add; else action=append; fi
+        printf '%s\n' "$text" |
+            git -C "$thread_repo/$path" notes --ref=review "$action" --file=- "$commit" || return 1
+    done
+)
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
 # come from <repo>'s own checkouts, not the remotes in .gitmodules, so unpushed
