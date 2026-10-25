@@ -75,9 +75,16 @@ pending() { # <repo-dir>: the workspace's branch exists here and is not merged y
         ! git -C "$1" merge-base --is-ancestor "$branch" HEAD
 }
 
-# Tests: commits lock every path they touch against later non-Tests: commits.
-# Use Git's quoted path output, not shell words: spaces and newlines in names
-# must compare exactly. Ancestry, not timestamps or log order, defines later.
+# Tests:, test:, and test(<scope>): commits lock every path they touch
+# against later commits that do not match one of those prefixes. Use Git's
+# quoted path output, not shell words: spaces and newlines in names must compare
+# exactly. Ancestry, not timestamps or log order, defines later.
+test_lock_subject() {
+    case "$1" in
+        Tests:*|test:\ *|test\(?*\):\ *) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 check_tests_lock() ( # <repo-dir> <display name>
     dir=$1 label=$2
     git -C "$dir" rev-parse -q --verify "refs/heads/$branch" >/dev/null || exit 0
@@ -86,14 +93,14 @@ check_tests_lock() ( # <repo-dir> <display name>
     bad=false
     for tests in $commits; do
         subject=$(git -C "$dir" show -s --format=%s "$tests")
-        case "$subject" in Tests:*) ;; *) continue ;; esac
+        test_lock_subject "$subject" || continue
         locked=$(git -C "$dir" -c core.quotePath=true diff-tree --root -m \
             --no-commit-id --name-only --no-renames -r "$tests")
         [ -n "$locked" ] || continue
         for later in $commits; do
             [ "$later" != "$tests" ] || continue
             subject=$(git -C "$dir" show -s --format=%s "$later")
-            case "$subject" in Tests:*) continue ;; esac
+            test_lock_subject "$subject" && continue
             git -C "$dir" merge-base --is-ancestor "$tests" "$later" || continue
             changed=$(git -C "$dir" -c core.quotePath=true diff-tree --root -m \
                 --no-commit-id --name-only --no-renames -r "$later")
