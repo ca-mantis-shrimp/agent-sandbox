@@ -51,6 +51,8 @@ printf '%s\n' '#!/bin/sh' \
     'case "$*" in' \
     '  *"update-ref refs/agent/candidate/interrupted/base"*)' \
     '    if [ "${INTERRUPT_RECORDING:-false}" = true ]; then exit 1; fi ;;' \
+    '  *"notes --ref=review add"*)' \
+    '    if [ "${NOTE_FAIL:-false}" = true ]; then exit 1; fi ;;' \
     '  *"branch -q -d"*)' \
     '    gl="$XDG_RUNTIME_DIR/agent-sandbox/land-green.lock"' \
     '    if [ -f "$gl" ]; then' \
@@ -467,18 +469,21 @@ git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/with-review"
 jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
     {n:1,read_only:false,closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
-    {n:2,read_only:true,model:"reviewer-model",review:{verdict:"land after fixes",findings:[
-        {severity:"should-fix",file:"change",line:7,what:"Handle this",why:"It can fail."},
-        {severity:"nit",file:null,line:null,what:"Simplify",why:"Less code."}],coverage:[],for_human:[]}}
+    {n:2,read_only:true,model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
+        {severity:"nit",file:"old",line:4,what:"Old review",why:"Not newest."}],coverage:[],for_human:[]}},
+    {n:3,read_only:true,model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
+        {severity:"should-fix",file:"change",line:null,what:"Handle\n  this",why:"It can\n fail."},
+        {severity:"nit",file:null,line:null,what:"Simplify\n this",why:"Less   code."}],coverage:[],for_human:[]}}
 ], human_verdict:{agrees_with_review:true,overruled:["false alarm"],missed:["missed bug"],note:"checked",at:"2026-10-25T10:00:00Z"}}' >"$AGENT_RUNS/with-review/manifest.json"
 (cd "$notesroot" && "$tool/bin/agent-land" with-review) >"$tmp/land.log" 2>&1
 root_merge=$(head_of "$notesroot")
 review_target=$(git -C "$notesroot" rev-parse "$root_merge^2")
 [ "$review_target" = "$reviewed_tip" ]
 git -C "$notesroot" notes --ref=review show "$review_target" >"$tmp/review-note"
-[ "$(sed -n 1p "$tmp/review-note")" = '# review: land after fixes by reviewer-model (session 2)' ]
-grep -Fqx 'change:7: should-fix: Handle this — It can fail.' "$tmp/review-note"
-grep -Fqx '(approach): nit: Simplify — Less code.' "$tmp/review-note"
+[ "$(sed -n 1p "$tmp/review-note")" = '# review: land after fixes by reviewer-model (session 3)' ]
+grep -Fqx 'change:1: should-fix: Handle this — It can fail.' "$tmp/review-note"
+grep -Fqx '(approach): nit: Simplify this — Less code.' "$tmp/review-note"
+! grep -Fq 'Old review' "$tmp/review-note"
 git -C "$notesroot" notes --ref=verdict show "$review_target" >"$tmp/verdict-note"
 grep -Fqx '# verdict: human agrees with the review (2026-10-25T10:00:00Z)' "$tmp/verdict-note"
 grep -Fqx 'overruled: false alarm' "$tmp/verdict-note"
@@ -502,6 +507,27 @@ if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1;
     echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
 fi
 grep -q 'no parsed review; no review note written' "$tmp/land.log"
+grep -q 'push when ready: git push origin$' "$tmp/land.log"
+! grep -q 'refs/notes/review\|refs/notes/verdict' "$tmp/land.log"
+
+# A note failure is advisory only: landing and cleanup are already recorded,
+# and the warning gives a concrete command for retrying the note.
+git -C "$notesroot" switch -q -c agent/note-failure
+commit "$notesroot" plain "note failure"
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/note-failure"
+jq -n --arg repo "$notesroot" '{repo:$repo,sessions:[
+    {n:1,read_only:true,model:"reviewer",started:"2026-10-25T11:00:00Z",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
+]}' >"$AGENT_RUNS/note-failure/manifest.json"
+if (cd "$notesroot" && NOTE_FAIL=true "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1; then :; else
+    echo 'agent-land.test > note failure made landing fatal' >&2; exit 1
+fi
+failed_note_tip=$(head_of "$notesroot")
+[ "$(jq -r '.landed_commit' "$AGENT_RUNS/note-failure/manifest.json")" = "$failed_note_tip" ]
+[ ! -e "$AGENT_RUNS/note-failure/work" ]
+[ ! -e "$AGENT_RUNS/land-note-failure/work" ]
+grep -q 'warning: could not write review note; retry with:' "$tmp/land.log"
+grep -q 'git -C .* notes --ref=review add --force --file=.*review-note' "$tmp/land.log"
 
 # Pin-only landing writes the review note on the new root pin commit; the
 # submodule merge still carries the work-session paragraph and trailer.
