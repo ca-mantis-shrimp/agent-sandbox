@@ -125,6 +125,12 @@ grep -Fqx '# verdict: facilitator disagrees with the review ('"$(jq -r .facilita
 grep -Fqx 'overruled: first finding' "$tmp/verdict-note"
 grep -Fqx 'missed: facilitator miss' "$tmp/verdict-note"
 grep -Fqx 'note: human note' "$tmp/verdict-note"
+[ "$(grep -c '^# verdict: human' "$tmp/verdict-note")" -eq 1 ]
+sh "$verdict" ws --disagree --overrule 'later judgment' >/dev/null 2>"$tmp/err"
+git -C "$repo" notes --ref=verdict show "$landed_commit" >"$tmp/verdict-note"
+grep -Fqx 'overruled: first finding' "$tmp/verdict-note"
+grep -Fqx 'overruled: later judgment' "$tmp/verdict-note"
+[ "$(grep -c '^# verdict: human' "$tmp/verdict-note")" -eq 2 ]
 # --pending lists landed workspaces with a landed commit and no human verdict,
 # newest first, as id, repository and first session label, tab-separated.
 pend="$tmp/pending-runs"

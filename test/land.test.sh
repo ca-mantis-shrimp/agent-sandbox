@@ -135,7 +135,7 @@ grep -q 'sub is on a detached HEAD' "$tmp/land.log"
 [ "$(head_of "$root/sub")" = "$before_sub" ]
 git -C "$root/sub" switch -q main
 land detached
-! grep -Eiq 'fatal:|error:' "$tmp/land.log"
+fails grep -Eiq 'fatal:|error:' "$tmp/land.log"
 [ "$(cat "$root/note")" = detached ]
 [ "$(cat "$root/sub/state")" = detached ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
@@ -176,7 +176,7 @@ git -C "$partial" update-ref refs/agent/land-base HEAD
 [ ! -f "$partial/.git/agent-land-built" ]
 land incomplete
 grep -q 'removing incomplete candidate' "$tmp/land.log"
-! grep -Eiq 'fatal:|error:' "$tmp/land.log"
+fails grep -Eiq 'fatal:|error:' "$tmp/land.log"
 [ "$(cat "$root/note")" = incomplete ]
 [ "$(cat "$root/sub/state")" = incomplete ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
@@ -274,7 +274,7 @@ flock -n -x "$AGENT_LAYERS/.build/$(basename "$root").lock" true
 # The candidate's workspace lock stayed held through unit start and landing cleanup.
 grep -qx "held $XDG_RUNTIME_DIR/agent-sandbox/land-green.lock" "$GATE_LOG"
 grep -qx 'held cleanup' "$GATE_LOG"
-! grep -q '^free' "$GATE_LOG"
+fails grep -q '^free' "$GATE_LOG"
 [ -z "$(git -C "$root" status --porcelain)" ]
 fails git -C "$root" rev-parse -q --verify refs/heads/agent/green >/dev/null
 fails git -C "$root/sub" rev-parse -q --verify refs/heads/agent/green >/dev/null
@@ -570,10 +570,31 @@ grep -Fqx 'note: checked carefully' "$tmp/verdict-note"
 message=$(git -C "$notesroot" show -s --format=%B "$root_merge")
 printf '%s\n' "$message" | grep -Fqx 'Implemented the reviewed change.'
 printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
-! printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'
+if printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'; then exit 1; fi
 grep -Fqx 'agent-land > landed agent/with-review; push when ready' "$tmp/land.log"
-! grep -Fq 'git push origin agent/' "$tmp/land.log"
+fails grep -Fq 'git push origin agent/' "$tmp/land.log"
 grep -q 'agent-land > then push its notes: git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
+
+# A fix round moves the branch tip, not the review's anchor. The root merge
+# cites the fixing commit, and repeated landing retries do not duplicate notes.
+git -C "$notesroot" switch -q -c agent/fixed-review
+commit "$notesroot" bug introduced
+before_fix=$(head_of "$notesroot")
+commit "$notesroot" bug repaired
+after_fix=$(head_of "$notesroot")
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/fixed-review"
+jq -n --arg repo "$notesroot" --arg before "$before_fix" --arg after "$after_fix" '{repo:$repo,sessions:[
+ {n:1,read_only:true,model:"reviewer",head_at_start:{".":$before},review:{verdict:"land after fixes",coverage:[],for_human:[],findings:[{file:"bug",line:1,severity:"blocking",what:"Repair bug",why:"Fails"}]}},
+ {n:2,read_only:false,review_session:"1",commits:{".":[$after]},closing:"```json\n{\"fixed\":[\"1#1\"],\"declined\":[]}\n```"}
+]}' >"$AGENT_RUNS/fixed-review/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
+git -C "$notesroot" log -1 --format='%(trailers:key=Finding-Fixed,valueonly)' |
+ grep -Fqx "1#1 $(printf %.7s "$after_fix") Repair bug (blocking)"
+git -C "$notesroot" notes --ref=review show "$before_fix" | grep -Fq '1#1 Repair bug'
+git -C "$notesroot" notes --ref=review show "$after_fix" | grep -Fq 'answers review: 1'
+(cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
+[ "$(git -C "$notesroot" notes --ref=review show "$before_fix" | grep -c '^# review:')" -eq 1 ]
 
 # A landed change without a parsed review must not get an empty review note.
 # Only the review note ref exists, so the push reminder must not mention verdict.
@@ -591,8 +612,8 @@ if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1;
 fi
 if git -C "$notesroot" show-ref --verify --quiet refs/notes/review; then exit 1; fi
 grep -Fqx 'agent-land > landed agent/no-review; push when ready' "$tmp/land.log"
-! grep -Fq 'git push origin agent/' "$tmp/land.log"
-! grep -q 'then push its notes:' "$tmp/land.log"
+fails grep -Fq 'git push origin agent/' "$tmp/land.log"
+fails grep -q 'then push its notes:' "$tmp/land.log"
 
 # A note failure is advisory only: landing and cleanup are already recorded,
 # and the warning gives a concrete command for retrying the note.

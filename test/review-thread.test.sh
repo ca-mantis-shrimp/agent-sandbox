@@ -45,4 +45,20 @@ git -C "$tmp/repo" notes --ref=review show "$base" >"$tmp/review"
 [ "$(grep -c '# review:' "$tmp/review")" -eq 2 ]
 grep -Fq '1#1 Bug' "$tmp/review"
 grep -Fq '3#1 Bug' "$tmp/review"
+# A report answering a different review cannot resolve this thread.
+if printf '%s\n' "$ws" | jq '.sessions[1].review_session="99"' |
+ jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers' | grep -q Finding-Fixed; then exit 1; fi
+# A submodule-only fix still has a produced commit to cite.
+printf '%s\n' "$ws" | jq '.sessions[1].commits |= {sub:.["."]}' |
+ jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers' | grep -Fq 'Finding-Fixed: 1#1'
+# The newest review starts its own thread; old fix IDs cannot resolve it.
+if printf '%s\n' "$ws" | jq '.sessions += [.sessions[0] | .n=3]' |
+ jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers' | grep -q Finding-Fixed; then exit 1; fi
+# Exact duplicate legacy texts are ambiguous, so neither is silently fixed.
+if printf '%s\n' "$ws" | jq '.sessions[0].review.findings[1].what="Bug" |
+ .sessions[1].closing="```json\n{\"fixed\":[\"Bug\"],\"declined\":[]}\n```"' |
+ jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers' | grep -q Finding-Fixed; then exit 1; fi
+# Agent-controlled repository paths must never send host Git to another clone.
+bad=$(printf '%s\n' "$ws" | jq --arg base "$base" '.sessions=[.sessions[0] | .head_at_start={"../repo":$base}]')
+if write_review_thread "$tmp/repo" "$bad"; then exit 1; fi
 echo 'review thread tests passed'
