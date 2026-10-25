@@ -496,6 +496,8 @@ printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
 grep -q 'git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
 
 # A landed change without a parsed review must not get an empty review note.
+# Only the review note ref exists, so the push reminder must not mention verdict.
+git -C "$notesroot" update-ref -d refs/notes/verdict
 git -C "$notesroot" switch -q -c agent/no-review
 commit "$notesroot" plain plain
 git -C "$notesroot" switch -q main
@@ -507,7 +509,7 @@ if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1;
     echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
 fi
 grep -q 'no parsed review; no review note written' "$tmp/land.log"
-grep -q 'push when ready: git push origin$' "$tmp/land.log"
+grep -q 'push when ready: git push origin refs/notes/review$' "$tmp/land.log"
 ! grep -q 'refs/notes/review\|refs/notes/verdict' "$tmp/land.log"
 
 # A note failure is advisory only: landing and cleanup are already recorded,
@@ -523,7 +525,8 @@ if (cd "$notesroot" && NOTE_FAIL=true "$tool/bin/agent-land" note-failure) >"$tm
     echo 'agent-land.test > note failure made landing fatal' >&2; exit 1
 fi
 failed_note_tip=$(head_of "$notesroot")
-[ "$(jq -r '.landed_commit' "$AGENT_RUNS/note-failure/manifest.json")" = "$failed_note_tip" ]
+[ "$(jq -r '.landed_commit' "$AGENT_RUNS/note-failure/manifest.json")" = "$(git -C "$notesroot" rev-parse "$failed_note_tip^2")" ]
+[ -n "$(jq -r '.landed' "$AGENT_RUNS/note-failure/manifest.json")" ]
 [ ! -e "$AGENT_RUNS/note-failure/work" ]
 [ ! -e "$AGENT_RUNS/land-note-failure/work" ]
 grep -q 'warning: could not write review note; retry with:' "$tmp/land.log"
