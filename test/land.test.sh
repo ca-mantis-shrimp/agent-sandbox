@@ -455,4 +455,78 @@ git -C "$root" switch -q main
 land lock-prefix
 [ "$(cat "$root/ordinary")" = changed ]
 
+# --- review and verdict notes travel with landed commits ----------------------
+
+notesroot="$tmp/notes-root"
+git init -q -b main "$notesroot"
+sandboxed "$notesroot"
+git -C "$notesroot" switch -q -c agent/with-review
+commit "$notesroot" change reviewed
+reviewed_tip=$(head_of "$notesroot")
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/with-review"
+jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
+    {n:1,read_only:false,closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
+    {n:2,read_only:true,model:"reviewer-model",review:{verdict:"land after fixes",findings:[
+        {severity:"should-fix",file:"change",line:7,what:"Handle this",why:"It can fail."},
+        {severity:"nit",file:null,line:null,what:"Simplify",why:"Less code."}],coverage:[],for_human:[]}}
+], human_verdict:{agrees_with_review:true,overruled:["false alarm"],missed:["missed bug"],note:"checked",at:"2026-10-25T10:00:00Z"}}' >"$AGENT_RUNS/with-review/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" with-review) >"$tmp/land.log" 2>&1
+root_merge=$(head_of "$notesroot")
+review_target=$(git -C "$notesroot" rev-parse "$root_merge^2")
+[ "$review_target" = "$reviewed_tip" ]
+git -C "$notesroot" notes --ref=review show "$review_target" >"$tmp/review-note"
+[ "$(sed -n 1p "$tmp/review-note")" = '# review: land after fixes by reviewer-model (session 2)' ]
+grep -Fqx 'change:7: should-fix: Handle this — It can fail.' "$tmp/review-note"
+grep -Fqx '(approach): nit: Simplify — Less code.' "$tmp/review-note"
+git -C "$notesroot" notes --ref=verdict show "$review_target" >"$tmp/verdict-note"
+grep -Fqx '# verdict: human agrees with the review (2026-10-25T10:00:00Z)' "$tmp/verdict-note"
+grep -Fqx 'overruled: false alarm' "$tmp/verdict-note"
+grep -Fqx 'missed: missed bug' "$tmp/verdict-note"
+grep -Fqx 'note: checked' "$tmp/verdict-note"
+message=$(git -C "$notesroot" show -s --format=%B "$root_merge")
+printf '%s\n' "$message" | grep -Fqx 'Implemented the reviewed change.'
+printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
+! printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'
+grep -q 'git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
+
+# A landed change without a parsed review must not get an empty review note.
+git -C "$notesroot" switch -q -c agent/no-review
+commit "$notesroot" plain plain
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/no-review"
+printf '{"repo":"%s"}\n' "$notesroot" >"$AGENT_RUNS/no-review/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" no-review) >"$tmp/land.log" 2>&1
+no_review_tip=$(head_of "$notesroot")
+if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1; then
+    echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
+fi
+grep -q 'no parsed review; no review note written' "$tmp/land.log"
+
+# Pin-only landing writes the review note on the new root pin commit; the
+# submodule merge still carries the work-session paragraph and trailer.
+pin_sub="$tmp/pin-sub"
+pinroot="$tmp/pin-root"
+git init -q -b main "$pin_sub"
+commit "$pin_sub" state before
+git init -q -b main "$pinroot"
+git -C "$pinroot" -c protocol.file.allow=always submodule -q add "$pin_sub" sub
+sandboxed "$pinroot"
+git -C "$pinroot/sub" switch -q main
+git -C "$pinroot/sub" switch -q -c agent/pin-only
+commit "$pinroot/sub" state after
+git -C "$pinroot/sub" switch -q main
+mkdir -p "$AGENT_RUNS/pin-only"
+jq -n --arg repo "$pinroot" '{repo:$repo,sessions:[
+    {n:1,read_only:false,closing:"Updated the pinned dependency.\n\nMore detail."},
+    {n:2,read_only:true,model:"pin-reviewer",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
+]}' >"$AGENT_RUNS/pin-only/manifest.json"
+(cd "$pinroot" && "$tool/bin/agent-land" pin-only) >"$tmp/land.log" 2>&1
+pin_commit=$(head_of "$pinroot")
+[ "$(git -C "$pinroot" rev-list --parents -n1 "$pin_commit" | wc -w)" -eq 2 ]
+git -C "$pinroot" notes --ref=review show "$pin_commit" | grep -Fqx '# review: land by pin-reviewer (session 2)'
+pin_message=$(git -C "$pinroot/sub" show -s --format=%B HEAD)
+printf '%s\n' "$pin_message" | grep -Fqx 'Updated the pinned dependency.'
+printf '%s\n' "$pin_message" | grep -Fqx 'Agent-Workspace: pin-only'
+
 echo "agent-land.test > ok"
