@@ -546,9 +546,9 @@ git -C "$notesroot" switch -q main
 mkdir -p "$AGENT_RUNS/with-review"
 jq -n --arg repo "$notesroot" --arg base "$(head_of "$notesroot")" --arg tip "$reviewed_tip" '{repo:$repo, base:$base, sessions:[
     {n:1,read_only:false,commits:{".":[$tip]},closing:"Implemented the reviewed change.\n\nThis is a later paragraph."},
-    {n:2,read_only:true,head_at_start:{".":$tip},model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
+    {n:2,read_only:true,model:"older-reviewer",started:"2026-10-25T09:00:00Z",review:{verdict:"land",findings:[
         {severity:"nit",file:"old",line:4,what:"Old review",why:"Not newest."}],coverage:[],for_human:[]}},
-    {n:3,read_only:true,head_at_start:{".":$tip},model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
+    {n:3,read_only:true,model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
         {severity:"should-fix",file:"change",line:null,what:"Handle\n  this",why:"It can\n fail."},
         {severity:"nit",file:null,line:null,what:"Simplify\n this",why:"Less   code."}],coverage:[],for_human:[]}}
 ], human_verdict:{agrees_with_review:true,overruled:["false\n alarm"],missed:["missed\n bug"],note:"checked\n carefully",at:"2026-10-25T10:00:00Z"}}' >"$AGENT_RUNS/with-review/manifest.json"
@@ -645,6 +645,29 @@ failed_note_tip=$(head_of "$notesroot")
 [ ! -e "$AGENT_RUNS/note-failure/work" ]
 [ ! -e "$AGENT_RUNS/land-note-failure/work" ]
 grep -q 'warning: could not write review thread' "$tmp/land.log"
+if git -C "$notesroot" notes --ref=review show "$failed_note_tip" 2>/dev/null; then exit 1; fi
+cp "$AGENT_RUNS/note-failure/review-thread.txt" "$tmp/saved-thread"
+jq '.sessions=[]' "$AGENT_RUNS/note-failure/manifest.json" >"$tmp/changed"
+mv "$tmp/changed" "$AGENT_RUNS/note-failure/manifest.json"
+(cd "$notesroot" && "$tool/bin/agent-land" note-failure) >"$tmp/land.log" 2>&1
+git -C "$notesroot" notes --ref=review show "$failed_note_tip" >"$tmp/retried-thread"
+cmp "$tmp/saved-thread" "$tmp/retried-thread"
+[ "$(head_of "$notesroot")" = "$failed_note_tip" ]
+[ "$(grep -c '^# review ' "$tmp/retried-thread")" -eq 1 ]
+
+# A workspace load failure must remain visible rather than silently lose reviews.
+git -C "$notesroot" switch -q -c agent/load-failure
+commit "$notesroot" plain 'load failure'
+git -C "$notesroot" switch -q main
+mkdir -p "$AGENT_RUNS/load-failure"
+printf '{"repo":"%s"}\n' "$notesroot" >"$AGENT_RUNS/load-failure/manifest.json"
+printf '%s\n' '#!/bin/sh' \
+    'if [ "$*" = "-s .[0] + {sessions: .[1]}" ]; then exit 1; fi' \
+    'exec "$real_jq" "$@"' >"$tmp/bin/jq"
+chmod +x "$tmp/bin/jq"
+(cd "$notesroot" && "$tool/bin/agent-land" load-failure) >"$tmp/land.log" 2>&1
+rm "$tmp/bin/jq"
+grep -Fq 'warning: could not load workspace reviews for landing advisories' "$tmp/land.log"
 
 # Pin-only landing writes the review note on the new root pin commit; the
 # submodule merge still carries the work-session paragraph and trailer.
@@ -663,7 +686,7 @@ mkdir -p "$AGENT_RUNS/pin-only"
 pin_reviewed=$(head_of "$pinroot")
 jq -n --arg repo "$pinroot" --arg tip "$pin_reviewed" '{repo:$repo,base:$tip,sessions:[
     {n:1,read_only:false,closing:"Updated the pinned dependency.\n\nMore detail."},
-    {n:2,read_only:true,head_at_start:{".":$tip},model:"pin-reviewer",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
+    {n:2,read_only:true,model:"pin-reviewer",review:{verdict:"land",findings:[],coverage:[],for_human:[]}}
 ]}' >"$AGENT_RUNS/pin-only/manifest.json"
 (cd "$pinroot" && "$tool/bin/agent-land" pin-only) >"$tmp/land.log" 2>&1
 pin_commit=$(head_of "$pinroot")
