@@ -20,8 +20,8 @@ def review_report:
 # Both session reviews and attributed external reports, including legacy manifests.
 def workspace_reviews:
   (.sessions[]? | select(.review != null)
-   | {source: "session \(.n)", reviewer: (.model // ""), review: .review}),
-  (.reviews[]? | . + {source: "external review \(.id) by \(.reviewer)"});
+   | {source: "session \(.n)", reviewer: (.model // ""), at: (.started // ""), review: .review}),
+  (.reviews[]? | . + {source: "external review \(.id) by \(.reviewer)", at: (.at // "")});
 
 def blocking_review_lines:
   workspace_reviews as $r | $r.review.findings[]?

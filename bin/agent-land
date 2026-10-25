@@ -184,12 +184,21 @@ check_harvested() {
     done
 }
 
+commit_with_workspace_message() { # <repo> <title>
+    {
+        printf '%s\n\n' "$2"
+        [ -z "$work_closing" ] || printf '%s\n\n' "$work_closing"
+        printf 'Agent-Workspace: %s\n' "$id"
+    } | git -C "$1" commit -q -F -
+}
+
 merge_candidate() {
     for sm in $submodules; do
         pending "$cand/$sm" || continue
         say "merging $branch into $sm"
-        git -C "$cand/$sm" merge --no-ff --no-edit -q "$branch" ||
+        git -C "$cand/$sm" merge --no-ff --no-commit -q "$branch" ||
             stop "conflict in $sm: resolve and commit it in $cand/$sm, then rerun"
+        commit_with_workspace_message "$cand/$sm" "Merge branch '$branch'"
     done
     (
         cd "$cand"
@@ -205,9 +214,9 @@ merge_candidate() {
         # shellcheck disable=SC2086
         [ -z "$submodules" ] || git add $submodules
         if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
-            git commit -q --no-edit
+            commit_with_workspace_message "$cand" "Merge branch '$branch'"
         elif ! git diff --cached --quiet; then
-            git commit -q -m "Pin submodules: land $branch"
+            commit_with_workspace_message "$cand" "Pin submodules: land $branch"
         fi
     )
 }
@@ -283,7 +292,8 @@ cleanup() {
         git -C "$repo/$sm" update-ref -d "$checkpoint/base"
     done
     rm -rf "$run/work" "$cand"
-    manifest --arg at "$(date -Iseconds)" '.landed = $at'
+    manifest --arg at "$(date -Iseconds)" --arg commit "$landing_note_commit" \
+        '.landed = $at | .landed_commit = $commit'
 }
 
 # Advisory only: a later fixer does not silently reconcile a review finding.
@@ -299,6 +309,11 @@ if [ -f "$run/manifest.json" ]; then
         say "warning: could not load workspace reviews for landing advisories"
     fi
 fi
+work_closing=$(printf '%s\n' "$workspace" | jq -r '
+    ([.sessions[]? | select(.read_only != true) | select((.closing | type) == "string")]
+     | if length == 0 then "" else max_by(.n // 0).closing end)
+    | if . == "" then "" else split("\n\n")[0] end
+    | gsub("^[\r\n]+|[\r\n]+$"; "")')
 check_harvested
 # Check all harvested repos before even merging a submodule into the candidate.
 for sm in . $submodules; do
@@ -332,7 +347,22 @@ done
 check_current true
 gate_candidate
 advance
+root_tip=$(git -C "$repo" rev-parse "$checkpoint/tip")
+set -- $(git -C "$repo" rev-list --parents -n1 "$root_tip")
+if [ "$#" -ge 3 ]; then landing_note_commit=$3; else landing_note_commit=$root_tip; fi
+review_note=$(printf '%s\n' "$workspace" | review_note_text)
+if [ -n "$review_note" ]; then
+    printf '%s\n' "$review_note" | write_git_note "$repo" review "$landing_note_commit"
+    say "wrote review note on $landing_note_commit"
+else
+    say "no parsed review; no review note written"
+fi
+verdict_note=$(printf '%s\n' "$workspace" | verdict_note_text)
+if [ -n "$verdict_note" ]; then
+    printf '%s\n' "$verdict_note" | write_git_note "$repo" verdict "$landing_note_commit"
+    say "wrote verdict note on $landing_note_commit"
+fi
 cleanup
-say "landed $branch; push when ready"
+say "landed $branch; push when ready: git push origin refs/notes/review refs/notes/verdict"
 human_verdict_reminder "$id" "$workspace" ||
     say "warning: could not display the human verdict reminder"

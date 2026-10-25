@@ -146,6 +146,36 @@ human_verdict_reminder() { # <workspace-id> <workspace-json>
         | "agent-land > review has no human verdict; say whether you agree with the review: agent-verdict \($ws) --agree|--disagree"' >&2
 }
 
+# Serialize parsed review and verdict records into repository-local Git notes.
+review_note_text() { # stdin: workspace JSON; empty when no parsed review
+    jq -r -L "$tool/lib" '
+        include "agent-review";
+        [workspace_reviews | select(.review | valid_review_report)] | sort_by(.at // "") | last as $r
+        | if $r == null then empty else
+            (["# review: \($r.review.verdict) by \($r.reviewer // "unknown") (\($r.source))"]
+             + [$r.review.findings[]? | if .file == null then
+                    "(approach): \(.severity): \(.what) — \(.why)"
+                else "\(.file):\(.line // "-"): \(.severity): \(.what) — \(.why)" end])
+            | join("\n")
+          end'
+}
+
+verdict_note_text() { # stdin: workspace JSON; one ordered block per recorded judge
+    jq -r '
+        def judge_lines($name): .[$name + "_verdict"] as $v
+            | if ($v | type) != "object" then [] else
+                (["# verdict: \($name) \($v.agrees_with_review | if . then "agrees" else "disagrees" end) with the review (\($v.at))"]
+                 + [$v.overruled[]? | "overruled: \(.)"]
+                 + [$v.missed[]? | "missed: \(.)"]
+                 + (if ($v.note // "") == "" then [] else ["note: \($v.note)"] end))
+              end;
+        judge_lines("human") + judge_lines("facilitator") | join("\n")'
+}
+
+write_git_note() { # <repo> <note-ref> <commit>; note content on stdin
+    git -C "$1" notes --ref="refs/notes/$2" add --force --file=- "$3"
+}
+
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
 # come from <repo>'s own checkouts, not the remotes in .gitmodules, so unpushed
 # local commits are available too.
