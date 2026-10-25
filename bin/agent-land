@@ -78,8 +78,7 @@ pending() { # <repo-dir>: the workspace's branch exists here and is not merged y
 # Tests:, test:, test(<scope>):, and their breaking-marker variants lock
 # every path they touch against later commits that do not match one of those
 # prefixes. Git's quoted path output, not shell words, keeps names with spaces
-# and newlines exact.
-# exactly. Ancestry, not timestamps or log order, defines later.
+# and newlines exact. Ancestry, not timestamps or log order, defines later.
 test_lock_subject() {
     case "$1" in
         Tests:*|test:\ *|test\(?*\):\ *|test!:\ *|test\(?*\)!:\ *) return 0 ;;
