@@ -59,7 +59,8 @@ def finding_trailers:
 # The host saves this conversation once, before landing, for exact retries.
 def review_thread_text:
   . as $w
-  | [(.sessions // [] | sort_by(.n)[]) as $s
+  | [((.sessions // []) + [.reviews[]? | {n: .id, started: .at, model: .reviewer, review: .review}]
+      | sort_by(.started // "", .n)[]) as $s
      | if ($s.review | valid_review_report) then
          "# review \($w.id)/\($s.n): \($s.review.verdict) by \($s.model // "unknown")",
          ($s.review | identified_findings($s.n | tostring)
@@ -67,7 +68,7 @@ def review_thread_text:
             else "\(.file):\(.line // 1): \(.severity): \(.id) \(.what | one_line) — \(.why | one_line)" end)
        elif $s.read_only != true then
          ($s | fix_report) as $report | select($report != null)
-         | "# fix \($w.id)/\($s.n) by \($s.model // "unknown"), answering review \($s.review_session // ([$w | workspace_reviews | select(if .n != null then .n < $s.n else .at <= ($s.started // "") end)] | sort_by(.at, .n) | last | .id) // "unknown")",
+         | "# fix \($w.id)/\($s.n) by \($s.model // "unknown"), answering review \($s.review_session // "unknown")",
            ($report.fixed[] | "fixed: \(. | one_line)"),
            ($report.declined[] | "declined: \(.id // .what | one_line) — \(.why | one_line)")
        else empty end] | join("\n");

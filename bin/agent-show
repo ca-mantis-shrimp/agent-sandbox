@@ -12,7 +12,7 @@ repo=$(workspace_repo "$run")
 commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$run/manifest.json")
 { git -C "$repo" notes --ref=review show "$commit" 2>/dev/null || :; } |
     jq -Rr --arg repo "$repo" --arg id "$id" '
-        if test("^.+:[0-9]+: ") then
+        if (test("^(#|fixed:|declined:)") | not) and test("^.+:[0-9]+: ") then
             capture("^(?<file>.+):(?<rest>[0-9]+: .*)$")
             | .file |= ltrimstr("/srv/job/" + $id + "/work/")
             | (if .file | startswith("/") then .file else $repo + "/" + .file end)
