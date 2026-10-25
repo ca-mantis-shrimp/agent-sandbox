@@ -98,6 +98,13 @@ printf 'base\n' >"$repo/file"
 git -C "$repo" add file
 git -C "$repo" commit -q -m base
 landed_commit=$(git -C "$repo" rev-parse HEAD)
+jq -n --arg repo "$repo" '{repo:$repo,landed:"yesterday"}' >"$manifest"
+sh "$verdict" ws --agree --overrule 'legacy finding' >/dev/null 2>"$tmp/err"
+jq -e '.human_verdict.overruled == ["legacy finding"] and .landed_commit == null' "$manifest" >/dev/null
+grep -Fq 'landed workspace ws has no recorded commit; no verdict note was written' "$tmp/err"
+if git -C "$repo" notes --ref=verdict show "$landed_commit" >/dev/null 2>&1; then
+    echo 'agent-verdict.test > wrote a note for a legacy landing without a commit' >&2; exit 1
+fi
 jq -n --arg repo "$repo" '{repo:$repo}' >"$manifest"
 sh "$verdict" ws --agree --overrule 'first finding' --note 'human note' >/dev/null 2>"$tmp/err"
 if git -C "$repo" notes --ref=verdict show "$landed_commit" >/dev/null 2>&1; then

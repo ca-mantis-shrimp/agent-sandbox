@@ -474,7 +474,7 @@ jq -n --arg repo "$notesroot" --arg tip "$reviewed_tip" '{repo:$repo, sessions:[
     {n:3,read_only:true,model:"reviewer-model",started:"2026-10-25T10:00:00Z",review:{verdict:"land after fixes",findings:[
         {severity:"should-fix",file:"change",line:null,what:"Handle\n  this",why:"It can\n fail."},
         {severity:"nit",file:null,line:null,what:"Simplify\n this",why:"Less   code."}],coverage:[],for_human:[]}}
-], human_verdict:{agrees_with_review:true,overruled:["false alarm"],missed:["missed bug"],note:"checked",at:"2026-10-25T10:00:00Z"}}' >"$AGENT_RUNS/with-review/manifest.json"
+], human_verdict:{agrees_with_review:true,overruled:["false\n alarm"],missed:["missed\n bug"],note:"checked\n carefully",at:"2026-10-25T10:00:00Z"}}' >"$AGENT_RUNS/with-review/manifest.json"
 (cd "$notesroot" && "$tool/bin/agent-land" with-review) >"$tmp/land.log" 2>&1
 root_merge=$(head_of "$notesroot")
 review_target=$(git -C "$notesroot" rev-parse "$root_merge^2")
@@ -488,15 +488,17 @@ git -C "$notesroot" notes --ref=verdict show "$review_target" >"$tmp/verdict-not
 grep -Fqx '# verdict: human agrees with the review (2026-10-25T10:00:00Z)' "$tmp/verdict-note"
 grep -Fqx 'overruled: false alarm' "$tmp/verdict-note"
 grep -Fqx 'missed: missed bug' "$tmp/verdict-note"
-grep -Fqx 'note: checked' "$tmp/verdict-note"
+grep -Fqx 'note: checked carefully' "$tmp/verdict-note"
 message=$(git -C "$notesroot" show -s --format=%B "$root_merge")
 printf '%s\n' "$message" | grep -Fqx 'Implemented the reviewed change.'
 printf '%s\n' "$message" | grep -Fqx "Agent-Workspace: with-review"
 ! printf '%s\n' "$message" | grep -Fq 'This is a later paragraph.'
-grep -q 'git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
+grep -q 'landed agent/with-review; push when ready: git push origin$' "$tmp/land.log"
+grep -q 'agent-land > then push its notes: git push origin refs/notes/review refs/notes/verdict' "$tmp/land.log"
 
 # A landed change without a parsed review must not get an empty review note.
 # Only the review note ref exists, so the push reminder must not mention verdict.
+git -C "$notesroot" update-ref -d refs/notes/review
 git -C "$notesroot" update-ref -d refs/notes/verdict
 git -C "$notesroot" switch -q -c agent/no-review
 commit "$notesroot" plain plain
@@ -509,8 +511,8 @@ if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1;
     echo 'agent-land.test > unexpected review note without a review' >&2; exit 1
 fi
 grep -q 'no parsed review; no review note written' "$tmp/land.log"
-grep -q 'push when ready: git push origin refs/notes/review$' "$tmp/land.log"
-! grep -q 'refs/notes/review\|refs/notes/verdict' "$tmp/land.log"
+grep -q 'landed agent/no-review; push when ready: git push origin$' "$tmp/land.log"
+! grep -q 'then push its notes:' "$tmp/land.log"
 
 # A note failure is advisory only: landing and cleanup are already recorded,
 # and the warning gives a concrete command for retrying the note.
