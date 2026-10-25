@@ -64,7 +64,7 @@ stop() {
     exit 1
 }
 if [ -f "$run/manifest.json" ] && [ -n "$(jq -r '.landed // empty' "$run/manifest.json")" ]; then
-    write_review_thread "$repo" "$run/review-thread.jsonl" || stop "could not retry review thread"
+    write_review_thread "$repo" "$run/review-thread.txt" "$(jq -er .landed_commit "$run/manifest.json")" || stop "could not retry review thread"
     say "already landed; review thread saved"
     exit 0
 fi
@@ -345,7 +345,8 @@ for sm in . $submodules; do
     done
 done
 if [ ! -d "$cand" ] || [ "$recorded" != true ]; then
-    workspace=$(prepare_review_thread "$repo" "$workspace" "$run/review-thread.jsonl")
+    printf '%s\n' "$workspace" | jq -r -L "$tool/lib" 'include "agent-review"; review_thread_text | select(length > 0)' >"$run/review-thread.txt.tmp"
+    mv "$run/review-thread.txt.tmp" "$run/review-thread.txt"
     finding_trailers=$(printf '%s\n' "$workspace" | jq -r -L "$tool/lib" 'include "agent-review"; finding_trailers')
     build_candidate
     check_current false
@@ -386,8 +387,8 @@ write_landing_note() { # <ref>
         say "warning: could not write $note_ref note; retry with: git -C \"$repo\" notes --ref=$note_ref append --file=\"$note_file\" $landing_note_commit"
     fi
 }
-# Notes use only the host-written pre-merge projection, including on retries.
-if ! write_review_thread "$repo" "$run/review-thread.jsonl"; then
+# Retry writes exactly the conversation saved before merging.
+if ! write_review_thread "$repo" "$run/review-thread.txt" "$root_tip"; then
     say "warning: could not write review thread; rerun agent-land $id to retry from saved thread"
 fi
 if [ -n "$verdict_note" ]; then

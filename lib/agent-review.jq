@@ -38,11 +38,10 @@ def workspace_reviews:
   (.reviews[]? | . + {source: "external review \(.id) by \(.reviewer)", at: (.at // "")});
 
 # Outcomes are a landing-time projection, never mutations to review records.
-# A linked (or, for legacy records, later) writer with a host-validated
-# produced commit can substantiate a fix. The host filters commits first.
+# A linked writer (or, for legacy records, a later writer) claims the fix.
 def finding_trailers:
   . as $w
-  | [workspace_reviews | select(.review | valid_review_report)] | sort_by(.at) | last as $r
+  | [workspace_reviews | select(.review | valid_review_report)] | sort_by(.at, .n) | last as $r
   | select($r != null)
   | $r.review | identified_findings($r.id) as $f
   | [$w.sessions[]? | select(.read_only != true)
@@ -50,49 +49,28 @@ def finding_trailers:
               elif $r.n != null then (.n // 0) > $r.n
               else (.started // "") >= $r.at end)
      | . as $s | fix_report as $report
-     | (($s.commits["."][0] // [$s.commits[]?[]?][0]) // "") as $commit
-     | select($report != null and $commit != "")
+     | select($report != null)
      | select(any($report.fixed[]; . == $f.id or
          (. == $f.what and ([$r.review.findings[] | select(.what == $f.what)] | length) == 1)))
-     | {n: $s.n, commit: $commit}] | sort_by(.n) | last as $fix
+     | {n: $s.n}] | sort_by(.n) | last as $fix
   | if $fix == null then "Finding-Open: \($f.id) \($f.what | one_line) (\($f.severity))"
-    else "Finding-Fixed: \($f.id) \($fix.commit[0:7]) \($f.what | one_line) (\($f.severity))" end;
+    else "Finding-Fixed: \($f.id) \($f.what | one_line) (\($f.severity)), by session \($fix.n)" end;
 
-# Intersect attribution with S, in host rev-list order (not agent array order).
-# Keep only the newest produced commit per repo, shared by fix notes/trailers.
-def host_review_workspace($sets):
-  . as $raw
-  | .sessions = [(.sessions // [])[] | . as $s
-      | .commits = ($sets | with_entries(.key as $path
-          | .value |= map(select(. as $sha | any($s.commits[$path][]?; . == $sha))))
-          | with_entries(select(.value | length > 0))) ] | .sessions |= sort_by(.n)
-  | .ignored_commits = any($raw.sessions[]?.commits // {} | to_entries[];
-      .key as $path | any(.value[]; . as $sha | all($sets[$path][]?; . != $sha)))
-  | . as $w
-  | .sessions |= map(. as $s
-      | .review_anchors = ($sets | with_entries(.key as $path
-          | .value |= map(select(. as $sha | any($w.sessions[];
-              .read_only != true and .n < $s.n and any(.commits[$path][]?; . == $sha))))
-          | .value = .value[0]) | with_entries(select(.value != null)))
-      | .commits |= with_entries(.value = .value[0:1]));
-
-# Rows are projected once before landing, then retained by the host for retries.
-def review_thread_records:
+# The host saves this conversation once, before landing, for exact retries.
+def review_thread_text:
   . as $w
-  | (.sessions[]? as $s
+  | [(.sessions // [] | sort_by(.n)[]) as $s
      | if ($s.review | valid_review_report) then
-         ($s.review_anchors // {} | to_entries[]) as $head
-         | {path: $head.key, commit: $head.value,
-            text: ((["# review: \($s.review.verdict) by \($s.model // "unknown") (\($w.id // "workspace")/\($s.n))"]
-              + [$s.review | identified_findings($s.n | tostring)
-                 | if .file == null then "(approach): \(.severity): \(.id) \(.what | one_line) — \(.why | one_line)"
-                   else "\(.file):\(.line // 1): \(.severity): \(.id) \(.what | one_line) — \(.why | one_line)" end]) | join("\n"))}
+         "# review \($w.id)/\($s.n): \($s.review.verdict) by \($s.model // "unknown")",
+         ($s.review | identified_findings($s.n | tostring)
+          | if .file == null then "(approach): \(.severity): \(.id) \(.what | one_line) — \(.why | one_line)"
+            else "\(.file):\(.line // 1): \(.severity): \(.id) \(.what | one_line) — \(.why | one_line)" end)
        elif $s.read_only != true then
          ($s | fix_report) as $report | select($report != null)
-         | ($s.commits // {} | to_entries[] | select(.value | length > 0)) as $head
-         | {path: $head.key, commit: $head.value[0],
-            text: "# fix: \($w.id // "workspace")/\($s.n) by \($s.model // "unknown")\nanswers review\(if any($w.reviews[]?; .id == $s.review_session) then " file" else "" end): \($s.review_session // ([$report.fixed[], $report.declined[]?.id // empty | select(contains("#")) | split("#")[0]] | unique | join(", ")))\n\($report | tojson)"}
-       else empty end);
+         | "# fix \($w.id)/\($s.n) by \($s.model // "unknown"), answering review \($s.review_session // ([$w | workspace_reviews | select(if .n != null then .n < $s.n else .at <= ($s.started // "") end)] | sort_by(.at, .n) | last | .id) // "unknown")",
+           ($report.fixed[] | "fixed: \(. | one_line)"),
+           ($report.declined[] | "declined: \(.id // .what | one_line) — \(.why | one_line)")
+       else empty end] | join("\n");
 
 def blocking_review_lines:
   workspace_reviews as $r | $r.review.findings[]?

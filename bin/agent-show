@@ -10,17 +10,14 @@ case "$id" in ''|.|..|*[!a-zA-Z0-9_-]*) echo 'agent-show > invalid workspace' >&
 run=$(runs_dir)/$id
 repo=$(workspace_repo "$run")
 commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$run/manifest.json")
-if [ -f "$run/review-thread.jsonl" ]; then
-    jq -r --arg repo "$repo" --arg id "$id" '
-        .path as $path | .text | split("\n")[]
-        | if test("^.+:[0-9]+: ") then
+{ git -C "$repo" notes --ref=review show "$commit" 2>/dev/null || :; } |
+    jq -Rr --arg repo "$repo" --arg id "$id" '
+        if test("^.+:[0-9]+: ") then
             capture("^(?<file>.+):(?<rest>[0-9]+: .*)$")
             | .file |= ltrimstr("/srv/job/" + $id + "/work/")
-            | (if .file | startswith("/") then .file
-               else $repo + (if $path == "." then "" else "/" + $path end) + "/" + .file end)
+            | (if .file | startswith("/") then .file else $repo + "/" + .file end)
               + ":" + .rest
-          else . end' "$run/review-thread.jsonl"
-fi
+        else . end'
 printf '\n# landing: %s\n' "$commit"
 git -C "$repo" show -s --format='%(trailers:only)' "$commit"
 # Read append-only Git notes, not the manifest's latest judgment per judge.

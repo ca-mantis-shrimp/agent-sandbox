@@ -173,46 +173,10 @@ workspace_id_input() { # '-' reads the first field of the first stdin line
     fi
 }
 
-# Compute S in each real repository before any merge/advance. Session records
-# only attribute members of these host-derived sets; they never supply anchors.
-prepare_review_thread() ( # <real-repo> <workspace-json> <host-thread-file>
-    thread_repo=$1 workspace=$2 thread_file=$3
-    id=$(printf '%s\n' "$workspace" | jq -r .id) || return 1
-    paths=$(repo_paths "$thread_repo") || return 1
-    sets=$(printf '%s\n' "$paths" | while IFS= read -r path; do
-        dir=$thread_repo/$path
-        git -C "$dir" show-ref --verify --quiet "refs/heads/agent/$id" || continue
-        base=$(git -C "$dir" merge-base HEAD "agent/$id") || exit 1
-        commits=$(git -C "$dir" rev-list "$base..agent/$id") || exit 1
-        printf '%s\n' "$commits" | jq -Rn --arg path "$path" '{($path): [inputs | select(length > 0)]}' || exit 1
-    done) || return 1
-    prepared=$({ printf '%s\n' "$workspace"; printf '%s\n' "$sets" | jq -s 'add // {}'; } |
-        jq -sc -L "$tool/lib" 'include "agent-review"; .[1] as $sets | .[0] | host_review_workspace($sets)') || return 1
-    if [ "$(printf '%s\n' "$prepared" | jq .ignored_commits)" = true ]; then
-        echo 'agent-sandbox > warning: ignored session commits outside host workspace sets' >&2
-    fi
-    printf '%s\n' "$prepared" | jq -c -L "$tool/lib" 'include "agent-review"; review_thread_records' >"$thread_file.tmp" || return 1
-    mv "$thread_file.tmp" "$thread_file" || return 1
-    printf '%s\n' "$prepared"
-)
-
-write_review_thread() ( # <real-repo> <host-thread-file>; retry never rederives rows
-    thread_repo=$1
-    [ -f "$2" ] || return 0
-    write_failed=0
-    while IFS= read -r row; do
-        path=$(printf '%s\n' "$row" | jq -r .path)
-        commit=$(printf '%s\n' "$row" | jq -r .commit)
-        text=$(printf '%s\n' "$row" | jq -r .text)
-        header=$(printf '%s\n' "$text" | head -n 1)
-        existing=$(git -C "$thread_repo/$path" notes --ref=review show "$commit" 2>/dev/null) || existing=
-        if printf '%s\n' "$existing" | grep -Fqx "$header"; then continue; fi
-        if [ -z "$existing" ]; then action=add; else action=append; fi
-        printf '%s\n' "$text" |
-            git -C "$thread_repo/$path" notes --ref=review "$action" --file=- "$commit" || write_failed=1
-    done <"$2"
-    return "$write_failed"
-)
+write_review_thread() { # <repo> <saved-text> <landed-commit>
+    [ -s "$2" ] || return 0
+    git -C "$1" notes --ref=review add -f --file="$2" "$3"
+}
 
 # Clone <repo> at its HEAD into <dest>, every submodule at its pin. Submodules
 # come from <repo>'s own checkouts, not the remotes in .gitmodules, so unpushed
