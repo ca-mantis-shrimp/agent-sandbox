@@ -1,0 +1,43 @@
+#!/bin/sh
+# The only command an outside agent's SSH key may run, from authorized_keys:
+#   restrict,command="<this> <agent>",from="<its tailnet addresses>" <key>
+# It reads the tasks queued for the agent in agent-queue and stores what the
+# agent delivers in an inbox the facilitator reads as data. Nothing the agent
+# sends is executed. It lives here, not in agent-queue, because the agent can
+# push to agent-queue. Commands, over ssh:
+#   tasks | get <task-id> | put <task-id> [<file>] <content
+set -eu
+say() { echo "agent-mailbox > $*" >&2; }
+name_ok() { printf '%s\n' "$1" | grep -Eqx '[A-Za-z0-9][A-Za-z0-9._-]{0,127}'; }
+agent=${1:-}
+name_ok "$agent" || { say "usage: agent-mailbox <agent>"; exit 2; }
+queue=${AGENT_QUEUE:-$HOME/Products/agent-queue}/to-$agent/incoming
+inbox=${AGENT_MAILBOX:-${XDG_DATA_HOME:-$HOME/.local/share}/agent-mailbox}/$agent
+max_file=${AGENT_MAILBOX_MAX_FILE:-1048576} max_inbox=67108864
+cmd=${SSH_ORIGINAL_COMMAND:-}
+mkdir -p "$inbox"
+printf '%s %s\n' "$(date -Iseconds)" "$(printf '%s' "$cmd" | tr -c '[:print:]' '?' | head -c 300)" >>"$inbox/calls.log"
+set -f
+# shellcheck disable=SC2086 # split into words, never globbed or evaluated
+set -- $cmd
+case "${1:-} $#" in
+    "tasks 1")
+        set +f # our glob, after the agent's words are split
+        for t in "$queue"/*.json; do [ ! -f "$t" ] || basename "$t" .json; done ;;
+    "get 2")
+        name_ok "$2" && [ -f "$queue/$2.json" ] || { say "no such task: $2"; exit 1; }
+        cat "$queue/$2.json" ;;
+    "put 2" | "put 3")
+        file=${3:-report.md}
+        name_ok "$2" && name_ok "$file" || { say "invalid name"; exit 2; }
+        [ "$(du -sb "$inbox" | cut -f1)" -lt "$max_inbox" ] || { say "inbox full"; exit 1; }
+        mkdir -p "$inbox/$2"
+        tmp=$(mktemp "$inbox/$2/.put.XXXXXX")
+        trap 'rm -f "$tmp"' EXIT
+        head -c $((max_file + 1)) >"$tmp"
+        [ "$(wc -c <"$tmp")" -le "$max_file" ] || { say "over $max_file bytes; nothing stored"; exit 1; }
+        # ln refuses an existing name, so a delivery is never overwritten.
+        ln "$tmp" "$inbox/$2/$file" 2>/dev/null || { say "already delivered: $2/$file"; exit 1; }
+        say "delivered $2/$file" ;;
+    *) say "usage: tasks | get <task-id> | put <task-id> [<file>] <content"; exit 2 ;;
+esac

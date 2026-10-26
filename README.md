@@ -114,6 +114,8 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | list landings awaiting a human verdict | `agent-verdict --pending` (workspace, repository, label, landed commit; tab-separated) |
 | read a landing's review thread | `agent show <workspace>` or `agent verdict --pending \| fzf \| agent show -` |
 | record the human's or facilitator's judgment | `agent-verdict <workspace> --agree\|--disagree [--by human\|facilitator] [--overrule <text>]... [--missed <text>]... [--note <text>]` (no judgment flag: help, nothing recorded) |
+| comment on one finding of a landing's review | `agent-verdict <workspace> --on <finding-id> [--agree\|--disagree] [--note <text>]` (appends; the landing stays pending) |
+| give an outside agent a mailbox, not a shell | `agent-mailbox <agent>` as its key's forced command (see Outside agents) |
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
@@ -226,6 +228,16 @@ A commit whose subject starts with `Tests:`, `test:`, or `test(<scope>):` locks 
 The landing gate runs the branch's `.sandbox/setup` and gate in the same unit template as sessions, so it can read the Claude credential and pi's shared login. For our own work, the branch was written by agent sessions that already held both, so this adds no credential exposure. If gates ever run code from elsewhere, give them their own unit without the credential and the login.
 
 A conflict leaves the candidate for resolution and a rerun. A red gate leaves the candidate and `gate.log`, with real branches unchanged. Once gated, the host never runs Git in that candidate again: reruns gate the retained tree and advance to tips saved before its first gate. To incorporate candidate edits or newly harvested work after gating, remove the candidate and rerun. If a real branch moved after the candidate was built, remove the candidate and rerun. Advancing several repos is not atomic: a partial failure reports which advanced, and a rerun skips them. Successful landing removes the workspace clone and candidate clone, retaining records, transcripts and the candidate's home/cache.
+
+## Outside agents
+
+An agent that runs on its own machine, outside our trust boundary, can reach this host over SSH only through a mailbox. Its key goes in `~/.ssh/authorized_keys` as
+
+```
+restrict,command="<sandbox>/bin/agent-mailbox <agent>",from="<its addresses>" <key>
+```
+
+so every connection runs `agent-mailbox` with no terminal or forwarding. The agent can `tasks` (list the ids queued in agent-queue's `to-<agent>/incoming/`), `get <task-id>` (print one), and `put <task-id> [<file>]` (store stdin, default `report.md`, in `~/.local/share/agent-mailbox/<agent>/<task-id>/`). Names are checked, a delivery is never overwritten, each file is capped at 1 MiB and the inbox at 64 MiB, and every call is logged in `calls.log` there. Nothing the agent sends is run, and deliveries are data for the facilitator to read. The script lives in this repository, not agent-queue, because the outside agent can push to agent-queue.
 
 ## Unattended runs
 
