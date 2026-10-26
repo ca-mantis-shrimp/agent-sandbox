@@ -160,6 +160,12 @@ verdict_note_text() { # stdin: workspace JSON; one ordered block per recorded ju
         judge_lines("human") + judge_lines("facilitator") | join("\n")'
 }
 
+finding_note_text() { # <judge>; stdin: one finding feedback entry
+    jq -r --arg by "$1" '
+        "# finding \(.finding): \($by) \(if .agrees == true then "agrees" elif .agrees == false then "disagrees" else "comments" end) (\(.at))"
+        + (if .note == "" then "" else "\nnote: \(.note | gsub("[[:space:]]+"; " "))" end)'
+}
+
 write_git_note() { # <repo> <note-ref> <commit>; append a verdict record
     git -C "$1" notes --ref="refs/notes/$2" append --file=- "$3"
 }

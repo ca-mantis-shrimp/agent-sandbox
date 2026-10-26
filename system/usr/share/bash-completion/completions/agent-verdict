@@ -4,7 +4,7 @@ _agent_verdict() {
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=($(compgen -W "$(agent-verdict --pending 2>/dev/null | cut -f1) --pending" -- "$cur"))
     else
-        COMPREPLY=($(compgen -W "--agree --disagree --overrule --missed --note --by" -- "$cur"))
+        COMPREPLY=($(compgen -W "--agree --disagree --on --overrule --missed --note --by" -- "$cur"))
     fi
 }
 complete -F _agent_verdict agent-verdict

@@ -2,6 +2,7 @@
 # Record a judge's call, including after landing; no interactive prompts.
 # Usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
 #        [--overrule <text>]... [--missed <text>]... [--note <text>]
+#        agent-verdict <workspace> --on <finding> [--agree|--disagree] [--note <text>]
 # Without --agree or --disagree it records nothing and prints help: a bare run
 # once recorded "disagrees" by default (2026-10-25).
 set -eu
@@ -10,6 +11,7 @@ usage() {
     cat <<'HELP'
 usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
                      [--overrule <text>]... [--missed <text>]... [--note <text>]
+       agent-verdict <workspace> --on <finding> [--agree|--disagree] [--note <text>]
        agent-verdict --pending
 
 Records your judgment of a workspace's review in its manifest.json. After
@@ -20,6 +22,9 @@ replaces that judge's earlier verdict without changing another judge's verdict.
   --overrule <text>     a review finding you reject (repeatable)
   --missed <text>       a problem the review did not catch (repeatable)
   --note <text>         anything else worth keeping
+  --on <finding>        give feedback on one finding instead, by its id (2#1):
+                        agree, disagree or only a --note. Appends, and leaves
+                        the landing waiting for its verdict
   --by                  who judges: human (default) or facilitator
   --pending             list landings waiting for your verdict, newest first:
                         workspace id, repository, label, landed commit (tab-separated)
@@ -44,7 +49,7 @@ fi
 ws=$(workspace_id_input "$1") || { say 'missing workspace on stdin'; exit 2; }
 shift
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
-by=human agree='' overruled='[]' missed='[]' note=''
+by=human agree='' overruled='[]' missed='[]' note='' finding=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --by)
@@ -64,23 +69,38 @@ while [ $# -gt 0 ]; do
             missed=$(jq -cn --argjson items "$missed" --arg text "$text" '$items + [$text]')
             shift 2 ;;
         --note) note=${2:?--note needs text}; shift 2 ;;
+        --on) finding=${2:?--on needs a finding id}; shift 2 ;;
         *) say "unknown argument: $1"; exit 2 ;;
     esac
 done
-if [ -z "$agree" ]; then
+if [ -n "$finding" ]; then
+    [ "$overruled$missed" = '[][]' ] || { say "--on takes only --agree, --disagree and --note"; exit 2; }
+    [ -n "$agree$note" ] || { say "say --agree, --disagree or --note for $finding; nothing recorded"; exit 2; }
+elif [ -z "$agree" ]; then
     # Other flags without a judgment are a mistake; no flags at all ask for help.
     [ -z "$note" ] && [ "$overruled" = '[]' ] && [ "$missed" = '[]' ] || { say "say --agree or --disagree; nothing recorded"; exit 2; }
     usage; exit 0
 fi
 run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
+if [ -n "$finding" ]; then
+    # An id is <review session>#<index>; a typo would attach feedback to nothing.
+    printf '%s\n' "$finding" | grep -Eqx '[0-9]+#[1-9][0-9]*' &&
+        jq -e --argjson k "${finding#*#}" '.review.findings[$k - 1] != null' \
+            "$run/sessions/${finding%%#*}.json" >/dev/null 2>&1 ||
+        { say "no such finding in $ws: $finding"; exit 2; }
+fi
 tmp=$(mktemp "$run/manifest.verdict.XXXXXX")
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
-jq --arg by "$by" --argjson agrees "$agree" --argjson overruled "$overruled" \
+if [ -n "$finding" ]; then
+    record='.[$by + "_findings"] += [{finding: $finding, agrees: $agrees, note: $note, at: $at}]'
+else
+    record='.[$by + "_verdict"] = {agrees_with_review: $agrees, overruled: $overruled,
+                                    missed: $missed, note: $note, at: $at}'
+fi
+jq --arg by "$by" --argjson agrees "${agree:-null}" --argjson overruled "$overruled" \
     --argjson missed "$missed" --arg note "$note" --arg at "$(date -Iseconds)" \
-    '.[$by + "_verdict"] = {agrees_with_review: $agrees, overruled: $overruled,
-                            missed: $missed, note: $note, at: $at}' \
-    "$run/manifest.json" >"$tmp"
+    --arg finding "$finding" "$record" "$run/manifest.json" >"$tmp"
 if jq -e '.landed != null' "$tmp" >/dev/null; then
     if commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$tmp"); then
         repo=$(workspace_repo "$run") || { say "cannot find the repository for landed workspace $ws"; exit 1; }
@@ -88,11 +108,15 @@ if jq -e '.landed != null' "$tmp" >/dev/null; then
             say "landed commit is unavailable for $ws: $commit"
             exit 1
         }
-        note=$(jq --arg by "$by" '{($by + "_verdict"): .[$by + "_verdict"]}' "$tmp" | verdict_note_text)
+        if [ -n "$finding" ]; then
+            note=$(jq --arg by "$by" '.[$by + "_findings"][-1]' "$tmp" | finding_note_text "$by")
+        else
+            note=$(jq --arg by "$by" '{($by + "_verdict"): .[$by + "_verdict"]}' "$tmp" | verdict_note_text)
+        fi
         printf '%s\n' "$note" | write_git_note "$repo" verdict "$commit"
     else
         say "landed workspace $ws has no recorded commit; no verdict note was written"
     fi
 fi
 mv "$tmp" "$run/manifest.json"
-say "recorded $by verdict for $ws"
+if [ -n "$finding" ]; then say "recorded $by feedback on $finding for $ws"; else say "recorded $by verdict for $ws"; fi

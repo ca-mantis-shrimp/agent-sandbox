@@ -56,3 +56,15 @@ to be validated (an agent could otherwise attach permanent, pushed notes to any 
 past what Darrion can review. The anchoring bought exact line numbers on a commit nobody checks out: a landing is
 reviewed at the landed code, and the review that says "land" usually read it. One host-chosen commit has nothing
 to forge. Cost: a finding from an early review points at lines that later fixes may have moved.
+
+## Decision 4: Feedback goes on the bundle, on single findings, or both
+
+Decided by Darrion on 2026-10-26. A landing's verdict (agree or disagree with the review, with an optional note)
+stays the call that closes it. Feedback on a single finding is optional and keyed by its id:
+`agent-verdict <ws> --on 2#1 --agree|--disagree|--note <text>`. It appends to the same verdict note on the landed
+commit as `# finding <id>: <judge> agrees|disagrees|comments (<time>)`, followed by an optional `note:` line, and
+leaves the landing waiting for its verdict.
+
+Why: a bundle holds findings Darrion agrees with and findings they don't, and a blanket call can't say which.
+Darrion: "i could just agree but i might agree or disagree with the bundle with extra comments so you know why
+then if im being really good i might leave comments on the individual pieces".
