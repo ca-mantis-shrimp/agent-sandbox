@@ -131,6 +131,35 @@ git -C "$repo" notes --ref=verdict show "$landed_commit" >"$tmp/verdict-note"
 grep -Fqx 'overruled: first finding' "$tmp/verdict-note"
 grep -Fqx 'overruled: later judgment' "$tmp/verdict-note"
 [ "$(grep -c '^# verdict: human' "$tmp/verdict-note")" -eq 2 ]
+# --on records feedback on one finding: agree, disagree or a comment alone. It
+# appends, leaves the bundle verdict alone, and refuses ids the review lacks.
+fdir="$tmp/finding-runs/ws"
+mkdir -p "$fdir/sessions"
+printf '{"n":2,"read_only":true,"review":{"verdict":"land","findings":[{"severity":"nit"},{"severity":"should-fix"}]}}\n' >"$fdir/sessions/2.json"
+jq -n --arg repo "$repo" --arg commit "$landed_commit" '{repo:$repo,landed:"t",landed_commit:$commit}' >"$fdir/manifest.json"
+export AGENT_RUNS="$tmp/finding-runs"
+manifest="$fdir/manifest.json"
+sh "$verdict" ws --on 2#2 --disagree --note 'not worth
+a cycle' >/dev/null 2>"$tmp/err"
+sh "$verdict" ws --on 2#1 --note 'good catch, later' >/dev/null 2>"$tmp/err"
+sh "$verdict" ws --on 2#2 --agree >/dev/null 2>"$tmp/err"
+jq -e '.human_verdict == null and [.human_findings[] | [.finding, .agrees, .note]] == [
+    ["2#2", false, "not worth\na cycle"], ["2#1", null, "good catch, later"], ["2#2", true, ""]]' "$manifest" >/dev/null
+git -C "$repo" notes --ref=verdict show "$landed_commit" >"$tmp/verdict-note"
+grep -Fqx "# finding 2#2: human disagrees ($(jq -r '.human_findings[0].at' "$manifest"))" "$tmp/verdict-note"
+grep -Fqx 'note: not worth a cycle' "$tmp/verdict-note"
+grep -Fqx "# finding 2#1: human comments ($(jq -r '.human_findings[1].at' "$manifest"))" "$tmp/verdict-note"
+grep -Fqx "# finding 2#2: human agrees ($(jq -r '.human_findings[2].at' "$manifest"))" "$tmp/verdict-note"
+# Finding feedback alone leaves the landing waiting for a verdict.
+AGENT_RUNS="$tmp/finding-runs" sh "$verdict" --pending | grep -q '^ws	'
+cp "$manifest" "$tmp/before"
+refuse ws --on 2#2
+refuse ws --on 2#3 --agree
+refuse ws --on 2#0 --agree
+refuse ws --on 9#1 --agree
+refuse ws --on 'x#1' --agree
+refuse ws --on 2#1 --agree --missed 'x'
+refuse ws --on
 # --pending lists landed workspaces with a landed commit and no human verdict,
 # newest first, as id, repository and first session label, tab-separated.
 pend="$tmp/pending-runs"
