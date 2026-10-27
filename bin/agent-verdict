@@ -34,6 +34,10 @@ replaces that judge's earlier verdict without changing another judge's verdict.
                         repository, label, review or finding id, stance, note
 
 Without --agree or --disagree nothing is recorded.
+
+After a verdict (not --on feedback) it runs the host's hook, if executable:
+$AGENT_VERDICT_HOOK, default ~/.config/agent-sandbox/on-verdict (empty: none),
+as <hook> <workspace> <judge> <repository>. A failing hook only warns.
 HELP
 }
 [ $# -gt 0 ] || { usage; exit 0; }
@@ -141,3 +145,10 @@ if jq -e '.landed != null' "$tmp" >/dev/null; then
 fi
 mv "$tmp" "$run/manifest.json"
 if [ -n "$finding" ]; then say "recorded $by feedback on $finding for $ws"; else say "recorded $by verdict for $ws"; fi
+# A bundle verdict ends a review: tell whoever reads it (the host's hook, e.g.
+# one that wakes the repository's steward). It must return quickly.
+hook=${AGENT_VERDICT_HOOK-${XDG_CONFIG_HOME:-$HOME/.config}/agent-sandbox/on-verdict}
+if [ -z "$finding" ] && [ -n "$hook" ] && command -v "$hook" >/dev/null; then
+    "$hook" "$ws" "$by" "$(workspace_repo "$run" 2>/dev/null)" </dev/null >&2 ||
+        say "on-verdict hook failed ($hook); the verdict is recorded"
+fi
