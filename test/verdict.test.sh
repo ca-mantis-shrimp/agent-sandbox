@@ -176,6 +176,26 @@ printf '20261002-000000\tplatform\t\tdef\n20261001-000000\tsrr\tpayment-boundary
 # Nothing pending prints nothing and succeeds.
 AGENT_RUNS="$tmp/empty-runs" sh "$verdict" --pending >"$tmp/pending"
 [ ! -s "$tmp/pending" ]
+# --feedback lists every human verdict and finding comment, oldest first, as
+# time, workspace, repository, label, target, stance and note (one line each);
+# with a time, only what was recorded after it. Other judges are left out.
+fb="$tmp/feedback-runs"
+mkdir -p "$fb/20261001-000000/sessions" "$fb/20261002-000000"
+printf '{"n":1,"label":"signup"}\n' >"$fb/20261001-000000/sessions/1.json"
+cat >"$fb/20261001-000000/manifest.json" <<'EOF'
+{"repo":"/x/srr","human_verdict":{"agrees_with_review":true,"note":"","at":"2026-10-01T03:00:00+00:00"},
+ "human_findings":[{"finding":"2#1","agrees":null,"note":"what should\nit do?","at":"2026-10-01T01:00:00+00:00"},
+                   {"finding":"2#2","agrees":false,"note":"","at":"2026-10-01T02:00:00+00:00"}],
+ "facilitator_verdict":{"agrees_with_review":false,"note":"mine","at":"2026-10-01T04:00:00+00:00"}}
+EOF
+printf '{"repo":"/x/platform"}\n' >"$fb/20261002-000000/manifest.json"
+AGENT_RUNS=$fb sh "$verdict" --feedback >"$tmp/feedback"
+printf '%s\t20261001-000000\tsrr\tsignup\t%s\n' \
+    '2026-10-01T01:00:00+00:00' "2#1	comments	what should it do?" \
+    '2026-10-01T02:00:00+00:00' "2#2	disagrees	" \
+    '2026-10-01T03:00:00+00:00' "review	agrees	" | cmp - "$tmp/feedback"
+AGENT_RUNS=$fb sh "$verdict" --feedback 2026-10-01T02:00:00+00:00 >"$tmp/feedback"
+[ "$(cut -f5 "$tmp/feedback")" = review ]
 # Bash completion offers the pending ids first, then flags.
 if command -v bash >/dev/null; then
     out=$(PATH="$tool/bin:$PATH" AGENT_RUNS=$pend bash -c '
