@@ -112,6 +112,7 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |
 | fix a review | `agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
 | list landings awaiting a human verdict | `agent-verdict --pending` (workspace, repository, label, landed commit; tab-separated) |
+| list the human's review feedback, so someone reads it | `agent-verdict --feedback [<time>]` (time, workspace, repository, label, review or finding id, stance, note; tab-separated, oldest first) |
 | read a landing's review thread | `agent show <workspace>` or `agent verdict --pending \| fzf \| agent show -` |
 | record the human's or facilitator's judgment | `agent-verdict <workspace> --agree\|--disagree [--by human\|facilitator] [--overrule <text>]... [--missed <text>]... [--note <text>]` (no judgment flag: help, nothing recorded) |
 | comment on one finding of a landing's review | `agent-verdict <workspace> --on <finding-id> [--agree\|--disagree] [--note <text>]` (appends; the landing stays pending) |

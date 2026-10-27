@@ -13,6 +13,7 @@ usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
                      [--overrule <text>]... [--missed <text>]... [--note <text>]
        agent-verdict <workspace> --on <finding> [--agree|--disagree] [--note <text>]
        agent-verdict --pending
+       agent-verdict --feedback [<time>]
 
 Records your judgment of a workspace's review in its manifest.json. After
 landing, it also appends to refs/notes/verdict on the landed commit. A later call
@@ -28,6 +29,9 @@ replaces that judge's earlier verdict without changing another judge's verdict.
   --by                  who judges: human (default) or facilitator
   --pending             list landings waiting for your verdict, newest first:
                         workspace id, repository, label, landed commit (tab-separated)
+  --feedback [<time>]   list the human's verdicts and finding comments recorded
+                        after <time> (ISO 8601), oldest first: time, workspace,
+                        repository, label, review or finding id, stance, note
 
 Without --agree or --disagree nothing is recorded.
 HELP
@@ -44,6 +48,23 @@ if [ "$1" = --pending ]; then
             select(.landed != null and (.landed_commit // "") != "" and .human_verdict == null)
             | [$id, (.repo // "" | split("/") | last), $label, .landed_commit] | @tsv' "$m" 2>/dev/null
     done | sort -r
+    exit 0
+fi
+if [ "$1" = --feedback ]; then
+    # So someone reads what the human wrote after a landing (2026-10-26).
+    for m in "$(runs_dir)"/*/manifest.json; do
+        [ -f "$m" ] || continue
+        d=${m%/manifest.json}
+        jq -r --arg id "${d##*/}" --arg since "${2:-}" \
+            --arg label "$(jq -r '.label // ""' "$d/sessions/1.json" 2>/dev/null)" '
+            def stance: if . == true then "agrees" elif . == false then "disagrees" else "comments" end;
+            (.repo // "" | split("/") | last) as $repo
+            | ((.human_verdict // empty | {at, target: "review", agrees: .agrees_with_review, note}),
+               (.human_findings // [] | .[] | {at, target: .finding, agrees, note}))
+            | select(.at > $since)
+            | [.at, $id, $repo, $label, .target, (.agrees | stance), (.note // "" | gsub("[[:space:]]+"; " ") | gsub("^ | $"; ""))]
+            | @tsv' "$m" 2>/dev/null
+    done | sort
     exit 0
 fi
 ws=$(workspace_id_input "$1") || { say 'missing workspace on stdin'; exit 2; }
