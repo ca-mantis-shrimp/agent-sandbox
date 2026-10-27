@@ -1,6 +1,7 @@
 #!/bin/sh
 # Dispatcher and command completion fixtures; no host commands or units required.
 set -eu
+export AGENT_VERDICT_HOOK= # never wake a real steward from a test
 tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

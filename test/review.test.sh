@@ -1,6 +1,7 @@
 #!/bin/sh
 # Closing report and host record contract; jq handles JSON, no harness needed.
 set -eu
+export AGENT_VERDICT_HOOK= # never wake a real steward from a test
 tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$tool/lib/agent-runs.sh"
 tmp=$(mktemp -d)

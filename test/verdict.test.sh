@@ -5,7 +5,7 @@ tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$tool/lib/agent-runs.sh"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-export AGENT_RUNS="$tmp/runs"
+export AGENT_RUNS="$tmp/runs" AGENT_VERDICT_HOOK=
 mkdir -p "$AGENT_RUNS/ws/sessions"
 manifest="$AGENT_RUNS/ws/manifest.json"
 printf '{"state":"ready","landed":"yesterday","keep":{"value":1}}\n' >"$manifest"
@@ -196,6 +196,17 @@ printf '%s\t20261001-000000\tsrr\tsignup\t%s\n' \
     '2026-10-01T03:00:00+00:00' "review	agrees	" | cmp - "$tmp/feedback"
 AGENT_RUNS=$fb sh "$verdict" --feedback 2026-10-01T02:00:00+00:00 >"$tmp/feedback"
 [ "$(cut -f5 "$tmp/feedback")" = review ]
+# A bundle verdict, the end of a review, runs the hook with the workspace, the
+# judge and the repository; finding feedback does not. A failing hook warns
+# and leaves the verdict recorded.
+printf '#!/bin/sh\necho "$@" >>%s\n' "$tmp/hook.calls" >"$tmp/hook"
+chmod +x "$tmp/hook"
+AGENT_VERDICT_HOOK="$tmp/hook" sh "$verdict" ws --on 2#1 --note 'later' 2>/dev/null
+[ ! -e "$tmp/hook.calls" ]
+AGENT_VERDICT_HOOK="$tmp/hook" sh "$verdict" ws --agree 2>/dev/null
+[ "$(cat "$tmp/hook.calls")" = "ws human $repo" ]
+AGENT_VERDICT_HOOK=false sh "$verdict" ws --disagree 2>"$tmp/err"
+grep -q 'hook' "$tmp/err" && jq -e '.human_verdict.agrees_with_review == false' "$manifest" >/dev/null
 # Bash completion offers the pending ids first, then flags.
 if command -v bash >/dev/null; then
     out=$(PATH="$tool/bin:$PATH" AGENT_RUNS=$pend bash -c '
