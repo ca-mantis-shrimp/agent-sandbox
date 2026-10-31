@@ -1,0 +1,12 @@
+# review 20261031-015839/2: land after fixes by claude-opus-5-5
+bin/agent-review-status:66: should-fix: 2#1 Any jq error exits through set -e with jq's status (e.g. 5) instead of 12. Reproduced with a stored .review object whose coverage is [1]: valid_review_report throws 'Cannot index number with string "check"' and the command exits 5. The jq calls at lines 41-43 can fail the same way on a non-object session element. — The brief says anything not recognised is 12. A workflow branching on 0/10/11/12 gets an undocumented code for a review that needs a person. Wrapping the checks (e.g. try (.review | valid_review_report) catch false, or `|| person ...` on each jq substitution) keeps every unexpected path on 12.
+test/review-status.test.sh:61: should-fix: 2#2 'no review' is only tested via a session that does not exist (ws/99). Not tested: a workspace with no read-only sessions, a finished read-only session with no JSON block (review null), a stored malformed review, and the real agent-result --wait path (the wait test replaces agent-result with a stub). — These are the 12 branches the brief singles out (no review at all, unrecognised input). The malformed-review gap is how the exit-5 path above went unnoticed.
+bin/agent-review-status:61: nit: 2#3 A stopped session (state 'stopped', e.g. after agent-stop) is reported as 'needs person: session failed'. — The exit code is right, but the one-line state misleads the person reading it; 'session stopped' or printing the state would be clearer.
+bin/agent-review-status:40: nit: 2#4 The idiom `if x=$(cmd); then :; else :; fi` is used three times to ignore agent-result's status. — `x=$(cmd) || :` says the same thing more plainly and matches common sh style.
+README.md:229: nit: 2#5 The new paragraph sits directly under list item 4 without indentation or a blank line, so it renders as part of item 4's paragraph (lazy continuation). — It reads as an aside about agent-fix rather than its own step; indenting it as a separate paragraph of item 4 would read better.
+# fix 20261031-015839/3 by gpt-6-luna, answering review 2
+fixed: 2#1
+fixed: 2#2
+fixed: 2#3
+fixed: 2#4
+fixed: 2#5
