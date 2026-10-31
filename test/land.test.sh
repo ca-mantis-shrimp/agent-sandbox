@@ -604,6 +604,7 @@ jq '.sessions=[]' "$AGENT_RUNS/fixed-review/manifest.json" >"$tmp/changed"
 mv "$tmp/changed" "$AGENT_RUNS/fixed-review/manifest.json"
 printf 'wrong note\n' | git -C "$notesroot" notes --ref=review add -f -F - "$fixed_landing"
 (cd "$notesroot" && "$tool/bin/agent-land" fixed-review) >"$tmp/land.log" 2>&1
+grep -Fqx 'agent-land > already landed; review thread saved' "$tmp/land.log"
 git -C "$notesroot" notes --ref=review show "$fixed_landing" >"$tmp/retry"
 cmp "$tmp/thread" "$tmp/retry"
 
@@ -625,6 +626,14 @@ if git -C "$notesroot" show-ref --verify --quiet refs/notes/review; then exit 1;
 grep -Fqx 'agent-land > landed agent/no-review; push when ready' "$tmp/land.log"
 fails grep -Fq 'git push origin agent/' "$tmp/land.log"
 fails grep -q 'then push its notes:' "$tmp/land.log"
+# Retrying a landing with no saved conversation must not claim that a thread
+# was saved or write an empty note.
+(cd "$notesroot" && "$tool/bin/agent-land" no-review) >"$tmp/land.log" 2>&1
+grep -Fqx 'agent-land > no saved review thread for no-review; nothing to write' "$tmp/land.log"
+fails grep -Fq 'already landed; review thread saved' "$tmp/land.log"
+if git -C "$notesroot" notes --ref=review show "$no_review_tip" >/dev/null 2>&1; then
+    echo 'agent-land.test > unexpected review note after empty retry' >&2; exit 1
+fi
 
 # A note failure is advisory only: landing and cleanup are already recorded,
 # and the warning gives a concrete command for retrying the note.
