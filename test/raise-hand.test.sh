@@ -13,17 +13,42 @@ printf '%s\n' '#!/bin/sh' 'case "$*" in *"-p ActiveState --value") echo active ;
 chmod +x "$tmp/bin/systemctl"
 cat >"$tmp/bin/dd" <<'EOF'
 #!/bin/sh
-if [ -n "${SWAP_QUESTION_FILE:-}" ]; then
-    for arg do
-        if [ "$arg" = "if=$SWAP_QUESTION_FILE" ]; then
-            rm -f -- "$SWAP_QUESTION_FILE"
-            ln -s "$SWAP_VICTIM" "$SWAP_QUESTION_FILE"
-        fi
-    done
-fi
+for arg do
+    case "$arg" in
+        "if=${SWAP_QUESTION_FILE:-}")
+            if [ -n "${SWAP_QUESTION_FILE:-}" ]; then
+                rm -f -- "$SWAP_QUESTION_FILE"
+                ln -s "$SWAP_VICTIM" "$SWAP_QUESTION_FILE"
+            fi
+            ;;
+        */8.md|if=8.md)
+            if [ -n "${SWAP_QUESTION_DIR:-}" ]; then
+                mv "$AGENT_JOB/questions" "$SWAP_QUESTION_DIR"
+                ln -s "$SWAP_QUESTION_TARGET" "$AGENT_JOB/questions"
+                unset SWAP_QUESTION_DIR
+            fi
+            ;;
+        */1.json|if=1.json)
+            if [ -n "${SWAP_SESSION_DIR:-}" ]; then
+                mv "$AGENT_JOB/sessions" "$SWAP_SESSION_DIR"
+                ln -s "$SWAP_SESSION_TARGET" "$AGENT_JOB/sessions"
+                unset SWAP_SESSION_DIR
+            fi
+            ;;
+    esac
+done
 exec /usr/bin/dd "$@"
 EOF
-chmod +x "$tmp/bin/dd"
+cat >"$tmp/bin/cat" <<'EOF'
+#!/bin/sh
+if [ -n "${SWAP_ANSWER_INPUT:-}" ] && [ "$1" = "$SWAP_ANSWER_INPUT" ]; then
+    mv "$AGENT_JOB/questions" "$SWAP_QUESTION_DIR"
+    ln -s "$SWAP_QUESTION_TARGET" "$AGENT_JOB/questions"
+    unset SWAP_ANSWER_INPUT
+fi
+exec /bin/cat "$@"
+EOF
+chmod +x "$tmp/bin/dd" "$tmp/bin/cat"
 export PATH="$tmp/bin:$tool/bin:$PATH"
 . "$tool/lib/agent-questions.sh"
 agent_unit_active() { return 0; }
@@ -105,6 +130,46 @@ grep -q 'refusing unsafe session record' "$tmp/error"
 rm "$AGENT_JOB/sessions/1.json"
 printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$AGENT_JOB/sessions/1.json"
 rm "$AGENT_JOB/questions/9.md"
+
+# Pinning questions/ must survive swapping the directory after the safety check.
+mkdir "$tmp/attacker-questions"
+printf '%s\n' 'HOST_ONLY_DIRECTORY_SECRET' >"$tmp/attacker-questions/8.md"
+printf '%s\n' 1 >"$tmp/attacker-questions/8.session"
+printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$tmp/attacker-questions/1.json"
+printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/8.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/8.session"
+export SWAP_QUESTION_DIR="$tmp/questions-pinned" SWAP_QUESTION_TARGET="$tmp/attacker-questions"
+waiting=$(waiting_questions "$AGENT_JOB" ws 2>"$tmp/error")
+if printf '%s\n' "$waiting" | grep -q 'HOST_ONLY_DIRECTORY_SECRET'; then exit 1; fi
+rm "$AGENT_JOB/questions"
+mv "$tmp/questions-pinned" "$AGENT_JOB/questions"
+unset SWAP_QUESTION_DIR SWAP_QUESTION_TARGET
+
+# Pinning sessions/ must not let an attacker substitute a running record.
+mkdir "$tmp/attacker-sessions"
+printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$tmp/attacker-sessions/1.json"
+printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/10.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/10.session"
+printf '%s\n' '{"n":1,"state":"finished","read_only":true}' >"$AGENT_JOB/sessions/1.json"
+export SWAP_SESSION_DIR="$tmp/sessions-pinned" SWAP_SESSION_TARGET="$tmp/attacker-sessions"
+if agent-answer ws/10 bad >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
+rm "$AGENT_JOB/sessions"
+mv "$tmp/sessions-pinned" "$AGENT_JOB/sessions"
+unset SWAP_SESSION_DIR SWAP_SESSION_TARGET
+printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$AGENT_JOB/sessions/1.json"
+
+# The answer is created in the pinned questions directory, not a swapped target.
+mkdir "$tmp/answer-target"
+printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/11.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/11.session"
+printf '%s\n' answer >"$tmp/answer-input"
+export SWAP_ANSWER_INPUT="$tmp/answer-input" SWAP_QUESTION_DIR="$tmp/questions-answer-pinned" SWAP_QUESTION_TARGET="$tmp/answer-target"
+agent-answer ws/11 "$tmp/answer-input"
+if [ -e "$tmp/answer-target/11.answer" ]; then exit 1; fi
+[ "$(cat "$tmp/questions-answer-pinned/11.answer")" = answer ]
+rm "$AGENT_JOB/questions"
+mv "$tmp/questions-answer-pinned" "$AGENT_JOB/questions"
+unset SWAP_ANSWER_INPUT SWAP_QUESTION_DIR SWAP_QUESTION_TARGET
 mkfifo "$AGENT_JOB/questions/3.md"
 if agent-answer ws/3 bad >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
 grep -q 'refusing unsafe question' "$tmp/error"
