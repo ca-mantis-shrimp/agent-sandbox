@@ -14,42 +14,60 @@ question_id_valid "$q" || { say "invalid question id: $q"; exit 2; }
 run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { say "no workspace: $ws"; exit 1; }
 question_dir_safe "$run" || { say "unsafe or missing questions directory for $ws"; exit 1; }
-question="$run/questions/$q.md"
-session_file="$run/questions/$q.session"
-[ ! -e "$run/questions/$q.timeout" ] && [ ! -L "$run/questions/$q.timeout" ] || {
-    say "question $ws/$q timed out"; exit 1;
-}
-question_contents=$(question_file_read "$question" 65536) || { say "refusing unsafe question: $question"; exit 1; }
-session_contents=$(question_file_read "$session_file" 32) || {
-    say "refusing unsafe question session record: $session_file"; exit 1;
-}
-session=$session_contents
-question_id_valid "$session" || { say 'invalid question session'; exit 1; }
-record="$run/sessions/$session.json"
-record_contents=$(question_file_read "$record" 65536) || { say "unsafe session record: $record"; exit 1; }
-printf '%s\n' "$record_contents" | jq -e --argjson n "$session" \
-    'select(.state == "running" and .n == $n)' >/dev/null 2>&1 || {
-    say "question $ws/$q is not from a running session"; exit 1;
-}
-agent_unit_active "$ws" || { say "session for $ws is not running"; exit 1; }
-answer="$run/questions/$q.answer"
-if [ -e "$answer" ] || [ -L "$answer" ]; then
-    say "answer already exists or is unsafe: $answer"
-    exit 1
-fi
-if [ -L "$input" ]; then say "refusing symlink input: $input"; exit 1; fi
-if [ -f "$input" ]; then
-    bytes=$(wc -c <"$input")
-    [ "$bytes" -le 65536 ] || { say 'answer exceeds 65536 bytes'; exit 1; }
-else
-    bytes=$(printf '%s' "$input" | wc -c)
-    [ "$bytes" -le 65536 ] || { say 'answer exceeds 65536 bytes'; exit 1; }
-fi
-# Noclobber prevents replacing an existing regular file, but is not O_EXCL for
-# every target type; a target swapped after the checks can still be special.
-if [ -f "$input" ]; then
-    (umask 002; set -C; cat "$input" >"$answer") || { say "could not create answer: $answer"; exit 1; }
-else
-    (umask 002; set -C; printf '%s\n' "$input" >"$answer") || { say "could not create answer: $answer"; exit 1; }
-fi
-say "answered $ws/$q"
+run_real=$(CDPATH= cd -- "$run" && pwd -P) || { say "no workspace: $ws"; exit 1; }
+expected_questions=$run_real/questions
+# Resolve a relative answer-file argument before entering the pinned directory.
+case "$input" in
+    /*) ;;
+    *) if [ -e "$input" ] || [ -L "$input" ]; then input=$(pwd -P)/$input; fi ;;
+esac
+(
+    cd -P "$run/questions" || { say "unsafe or missing questions directory for $ws"; exit 1; }
+    [ "$(pwd -P)" = "$expected_questions" ] || {
+        say "unsafe or missing questions directory for $ws"; exit 1;
+    }
+    [ ! -e "$q.timeout" ] && [ ! -L "$q.timeout" ] || {
+        say "question $ws/$q timed out"; exit 1;
+    }
+    question_contents=$(question_file_read "$q.md" 65536) || {
+        say "refusing unsafe question: $run/questions/$q.md"; exit 1;
+    }
+    session_contents=$(question_file_read "$q.session" 32) || {
+        say "refusing unsafe question session record: $run/questions/$q.session"; exit 1;
+    }
+    session=$session_contents
+    question_id_valid "$session" || { say 'invalid question session'; exit 1; }
+    expected_sessions=$run_real/sessions
+    record_contents=$(
+        [ ! -L "$expected_sessions" ] && [ -d "$expected_sessions" ] || exit 1
+        cd -P "$expected_sessions" || exit 1
+        [ "$(pwd -P)" = "$expected_sessions" ] || exit 1
+        question_file_read "$session.json" 65536
+    ) || { say "unsafe session record: $run/sessions/$session.json"; exit 1; }
+    printf '%s\n' "$record_contents" | jq -e --argjson n "$session" \
+        'select(.state == "running" and .n == $n)' >/dev/null 2>&1 || {
+        say "question $ws/$q is not from a running session"; exit 1;
+    }
+    agent_unit_active "$ws" || { say "session for $ws is not running"; exit 1; }
+    answer=$q.answer
+    if [ -e "$answer" ] || [ -L "$answer" ]; then
+        say "answer already exists or is unsafe: $run/questions/$answer"
+        exit 1
+    fi
+    if [ -L "$input" ]; then say "refusing symlink input: $input"; exit 1; fi
+    if [ -f "$input" ]; then
+        bytes=$(wc -c <"$input")
+        [ "$bytes" -le 65536 ] || { say 'answer exceeds 65536 bytes'; exit 1; }
+    else
+        bytes=$(printf '%s' "$input" | wc -c)
+        [ "$bytes" -le 65536 ] || { say 'answer exceeds 65536 bytes'; exit 1; }
+    fi
+    # Noclobber prevents replacing an existing regular file, but is not O_EXCL for
+    # every target type; a target swapped after the checks can still be special.
+    if [ -f "$input" ]; then
+        (umask 002; set -C; cat "$input" >"$answer") || { say "could not create answer: $run/questions/$answer"; exit 1; }
+    else
+        (umask 002; set -C; printf '%s\n' "$input" >"$answer") || { say "could not create answer: $run/questions/$answer"; exit 1; }
+    fi
+    say "answered $ws/$q"
+)

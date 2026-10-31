@@ -28,49 +28,65 @@ question_dir_safe() { # <workspace-dir>
 
 # Print unanswered questions belonging to currently running sessions as
 # <question-id><TAB><sanitized first line>. Errors never cause unsafe reads.
-waiting_questions() { # <workspace-dir> <workspace-id>
+waiting_questions() ( # <workspace-dir> <workspace-id>
     qrun=$1 qid=$2
-    [ -e "$qrun/questions" ] || return 0
+    [ -e "$qrun/questions" ] || exit 0
     if ! question_dir_safe "$qrun"; then
         echo "agent-status > refusing unsafe questions directory: $qrun/questions" >&2
-        return 0
+        exit 0
     fi
-    for qfile in "$qrun"/questions/*.md; do
+    run_real=$(CDPATH= cd -- "$qrun" && pwd -P) || exit 0
+    expected_questions=$run_real/questions
+    cd -P "$qrun/questions" || {
+        echo "agent-status > refusing unsafe questions directory: $qrun/questions" >&2
+        exit 0
+    }
+    if [ "$(pwd -P)" != "$expected_questions" ]; then
+        echo "agent-status > refusing unsafe questions directory: $qrun/questions" >&2
+        exit 0
+    fi
+    for qfile in ./*.md; do
         [ -e "$qfile" ] || [ -L "$qfile" ] || continue
-        qname=${qfile##*/}
+        qname=${qfile#./}
         q=${qname%.md}
+        display_question=$qrun/questions/$qname
         if ! question_id_valid "$q"; then
-            echo "agent-status > refusing unsafe question: $qfile" >&2
+            echo "agent-status > refusing unsafe question: $display_question" >&2
             continue
         fi
-        [ ! -e "$qrun/questions/$q.timeout" ] && [ ! -L "$qrun/questions/$q.timeout" ] || continue
+        [ ! -e "$q.timeout" ] && [ ! -L "$q.timeout" ] || continue
         question_contents=$(question_file_read "$qfile" 65536) || {
-            echo "agent-status > refusing unsafe question: $qfile" >&2
+            echo "agent-status > refusing unsafe question: $display_question" >&2
             continue
         }
-        session_file="$qrun/questions/$q.session"
+        session_file=$q.session
         session_contents=$(question_file_read "$session_file" 32) || {
-            echo "agent-status > refusing unsafe question session record: $session_file" >&2
+            echo "agent-status > refusing unsafe question session record: $qrun/questions/$session_file" >&2
             continue
         }
         session=$session_contents
         question_id_valid "$session" || continue
-        record="$qrun/sessions/$session.json"
-        record_contents=$(question_file_read "$record" 65536) || {
-            echo "agent-status > refusing unsafe session record: $record" >&2
+        expected_sessions=$run_real/sessions
+        record_contents=$(
+            [ ! -L "$expected_sessions" ] && [ -d "$expected_sessions" ] || exit 1
+            cd -P "$expected_sessions" || exit 1
+            [ "$(pwd -P)" = "$expected_sessions" ] || exit 1
+            question_file_read "$session.json" 65536
+        ) || {
+            echo "agent-status > refusing unsafe session record: $run_real/sessions/$session.json" >&2
             continue
         }
         printf '%s\n' "$record_contents" | jq -e --argjson n "$session" \
             'select(.state == "running" and .n == $n)' >/dev/null 2>&1 || continue
         agent_unit_active "$qid" || continue
-        answer="$qrun/questions/$q.answer"
+        answer=$q.answer
         if [ -e "$answer" ] || [ -L "$answer" ]; then
             if [ -L "$answer" ] || [ ! -f "$answer" ]; then
-                echo "agent-status > refusing unsafe answer: $answer" >&2
+                echo "agent-status > refusing unsafe answer: $qrun/questions/$answer" >&2
             fi
             continue
         fi
         title=$(printf '%s\n' "$question_contents" | head -n 1 | tr -cd '\11\12\15\40-\176' | tr '\t\r' '  ' | cut -c1-200)
         printf '%s\t%s\n' "$q" "$title"
     done
-}
+)
