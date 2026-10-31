@@ -64,8 +64,12 @@ stop() {
     exit 1
 }
 if [ -f "$run/manifest.json" ] && [ -n "$(jq -r '.landed // empty' "$run/manifest.json")" ]; then
-    write_review_thread "$repo" "$run/review-thread.txt" "$(jq -er .landed_commit "$run/manifest.json")" || stop "could not retry review thread"
-    say "already landed; review thread saved"
+    if [ -s "$run/review-thread.txt" ]; then
+        write_review_thread "$repo" "$run/review-thread.txt" "$(jq -er .landed_commit "$run/manifest.json")" || stop "could not retry review thread"
+        say "already landed; review thread saved"
+    else
+        say "no saved review thread for $id; nothing to write"
+    fi
     exit 0
 fi
 name() { # <repo path relative to the repo>
