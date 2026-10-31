@@ -22,11 +22,45 @@ set -eu
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-systemd.sh"
 . "$tool/lib/agent-runs.sh"
+. "$tool/lib/agent-questions.sh"
 runs=$(runs_dir)
 if [ "${1:-}" = --held ]; then
     [ "$#" -eq 2 ] || { echo 'usage: agent-status --held <repo-path>' >&2; exit 2; }
     held_workspaces "$2"
     exit $?
+fi
+
+print_questions() { # <workspace-id> <question-list>
+    [ -n "$2" ] || return 0
+    count=$(printf '%s\n' "$2" | wc -l | tr -d ' ')
+    printf '%s waiting questions: %s\n' "$1" "$count"
+    printf '%s\n' "$2" | while IFS="$(printf '\t')" read -r q title; do
+        printf '  %s/%s  %s\n' "$1" "$q" "$title"
+    done
+}
+
+show_questions() { # <workspace-dir> <workspace-id>
+    waiting=$(waiting_questions "$1" "$2")
+    print_questions "$2" "$waiting"
+}
+
+if [ "${1:-}" = --wait-question ]; then
+    [ "$#" -eq 1 ] || { echo 'usage: agent-status --wait-question' >&2; exit 2; }
+    while :; do
+        found=0
+        for dir in "$runs"/*/; do
+            [ -f "$dir/manifest.json" ] || continue
+            jq -e '.retired == null' "$dir/manifest.json" >/dev/null 2>&1 || continue
+            id=$(basename "${dir%/}")
+            questions=$(waiting_questions "${dir%/}" "$id")
+            if [ -n "$questions" ]; then
+                print_questions "$id" "$questions"
+                found=1
+            fi
+        done
+        [ "$found" -eq 0 ] || exit 0
+        sleep "${AGENT_QUESTION_POLL_SECS:-2}"
+    done
 fi
 stuck=${AGENT_STUCK_SECS:-600}
 now=$(date +%s)
@@ -99,6 +133,7 @@ if [ $# -gt 0 ]; then
     dir="$runs/$1"
     test -f "$dir/manifest.json" || { echo "agent-status > no run at $dir" >&2; exit 1; }
     row "$dir"
+    show_questions "$dir" "$1"
     latest=$(latest_transcript "$dir")
     if [ -n "$latest" ]; then
         if [ "$(workspace_json "$dir" | jq -r '(.sessions | last | .harness) // .harness // "claude"')" = pi ]; then
@@ -113,5 +148,6 @@ fi
 for dir in "$runs"/*/; do
     if [ -f "$dir/manifest.json" ] && ! jq -e '.retired != null' "$dir/manifest.json" >/dev/null; then
         row "${dir%/}"
+        show_questions "${dir%/}" "$(basename "${dir%/}")"
     fi
 done

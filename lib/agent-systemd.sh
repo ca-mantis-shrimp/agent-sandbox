@@ -85,7 +85,7 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
     env_value() {
         printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
     }
-    for value in "$3" "$4" "$5" "${AGENT_PI_PROVIDER:-openai}" "${AGENT_SESSION_USD:-}"; do
+    for value in "$3" "$4" "$5" "${AGENT_PI_PROVIDER:-openai}" "${AGENT_SESSION_USD:-}" "${AGENT_QUESTION_TIMEOUT_SECS:-}"; do
         case "$value" in *'
 '*|*'
 '*) echo 'agent-sandbox > newline in run environment' >&2; exit 1 ;; esac
@@ -96,6 +96,8 @@ write_agent_run() ( # <run-dir> <repository> <harness> <model> <n> <read-only>
         [ "$3" != pi ] || printf 'AGENT_PI_PROVIDER="%s"\n' "$(env_value "${AGENT_PI_PROVIDER:-openai}")"
         printf 'AGENT_SESSION="%s"\n' "$(env_value "$5")"
         [ -z "${AGENT_SESSION_USD:-}" ] || printf 'AGENT_SESSION_USD="%s"\n' "$(env_value "$AGENT_SESSION_USD")"
+        [ -z "${AGENT_QUESTION_TIMEOUT_SECS:-}" ] ||
+            printf 'AGENT_QUESTION_TIMEOUT_SECS="%s"\n' "$(env_value "$AGENT_QUESTION_TIMEOUT_SECS")"
         [ "$3" != gate ] || printf 'AGENT_LAND_GATE="%s"\n' "$(env_value "${AGENT_LAND_GATE:-.sandbox/gate}")"
     } >"$run/run.env.tmp"
     mv "$run/run.env.tmp" "$run/run.env"
