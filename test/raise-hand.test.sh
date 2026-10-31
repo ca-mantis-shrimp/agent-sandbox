@@ -11,7 +11,22 @@ printf '%s\n' '{"id":"ws","state":"ready","started":"2026-10-31T00:00:00Z"}' >"$
 printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$AGENT_JOB/sessions/1.json"
 printf '%s\n' '#!/bin/sh' 'case "$*" in *"-p ActiveState --value") echo active ;; *) exit 2 ;; esac' >"$tmp/bin/systemctl"
 chmod +x "$tmp/bin/systemctl"
+cat >"$tmp/bin/dd" <<'EOF'
+#!/bin/sh
+if [ -n "${SWAP_QUESTION_FILE:-}" ]; then
+    for arg do
+        if [ "$arg" = "if=$SWAP_QUESTION_FILE" ]; then
+            rm -f -- "$SWAP_QUESTION_FILE"
+            ln -s "$SWAP_VICTIM" "$SWAP_QUESTION_FILE"
+        fi
+    done
+fi
+exec /usr/bin/dd "$@"
+EOF
+chmod +x "$tmp/bin/dd"
 export PATH="$tmp/bin:$tool/bin:$PATH"
+. "$tool/lib/agent-questions.sh"
+agent_unit_active() { return 0; }
 
 # Ask creates a question outside work, waits, and returns the answer as text.
 question=$(printf 'Where is it?\033[31m')
@@ -42,6 +57,16 @@ code=0
 wait "$timeout_pid" || code=$?
 [ "$code" -ne 0 ]
 grep -q 'timed out; take the NEEDS DECISION stop' "$tmp/timeout-log"
+[ -f "$AGENT_JOB/questions/2.timeout" ]
+status=$(agent-status ws)
+if printf '%s\n' "$status" | grep -q 'ws/2 '; then exit 1; fi
+if agent-answer ws/2 late >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
+grep -q 'timed out' "$tmp/error"
+
+# The launcher rejects waits close enough to the unit deadline to risk a kill.
+if AGENT_QUESTION_TIMEOUT_SECS=3601 AGENT_SESSION=1 \
+    "$tool/agents/agent-ask" invalid >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
+grep -q 'must not exceed 3600' "$tmp/error"
 
 # A planted answer symlink cannot write through to a host file.
 printf '%s\n' 'planted question' >"$AGENT_JOB/questions/3.md"
@@ -58,9 +83,36 @@ ln -s "$tmp/victim" "$AGENT_JOB/questions/3.md"
 if agent-answer ws/3 bad >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
 grep -q 'refusing unsafe question' "$tmp/error"
 rm "$AGENT_JOB/questions/3.md"
+# Replace a checked regular file with a symlink precisely before dd opens it.
+printf '%s\n' 'HOST_ONLY_SECRET' >"$tmp/victim"
+printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/8.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/8.session"
+export SWAP_QUESTION_FILE="$AGENT_JOB/questions/8.md" SWAP_VICTIM="$tmp/victim"
+waiting=$(waiting_questions "$AGENT_JOB" ws 2>"$tmp/error")
+unset SWAP_QUESTION_FILE SWAP_VICTIM
+if printf '%s\n' "$waiting" | grep -q 'HOST_ONLY_SECRET'; then exit 1; fi
+grep -q 'refusing unsafe question' "$tmp/error"
+rm "$AGENT_JOB/questions/8.md"
+# The session record is likewise swapped after its regular-file check.
+printf '%s\n' 'HOST_ONLY_SECRET_SESSION' >"$tmp/victim"
+printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/9.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/9.session"
+export SWAP_QUESTION_FILE="$AGENT_JOB/sessions/1.json" SWAP_VICTIM="$tmp/victim"
+waiting=$(waiting_questions "$AGENT_JOB" ws 2>"$tmp/error")
+unset SWAP_QUESTION_FILE SWAP_VICTIM
+if printf '%s\n' "$waiting" | grep -q 'HOST_ONLY_SECRET'; then exit 1; fi
+grep -q 'refusing unsafe session record' "$tmp/error"
+rm "$AGENT_JOB/sessions/1.json"
+printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$AGENT_JOB/sessions/1.json"
+rm "$AGENT_JOB/questions/9.md"
 mkfifo "$AGENT_JOB/questions/3.md"
 if agent-answer ws/3 bad >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
 grep -q 'refusing unsafe question' "$tmp/error"
+# The host waiter must also refuse a FIFO without blocking on its open.
+started=$(date +%s)
+status=$(agent-status ws)
+[ $(( $(date +%s) - started )) -lt 5 ]
+if printf '%s\n' "$status" | grep -q 'ws/3 '; then exit 1; fi
 rm "$AGENT_JOB/questions/3.md"
 # Oversized question and answer payloads are refused before content is read/written.
 head -c 65537 /dev/zero | tr '\000' x >"$AGENT_JOB/questions/5.md"
@@ -73,6 +125,19 @@ head -c 65537 /dev/zero | tr '\000' x >"$tmp/too-large"
 if agent-answer ws/6 "$tmp/too-large" >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
 grep -q 'answer exceeds 65536 bytes' "$tmp/error"
 printf '%s\n' 1 >"$AGENT_JOB/sessions/1.json" # malformed record cannot make it a running question
+# A FIFO session record must not block either question-side reader.
+printf '%s\n' 'planted question' >"$AGENT_JOB/questions/7.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/7.session"
+rm "$AGENT_JOB/sessions/1.json"
+mkfifo "$AGENT_JOB/sessions/1.json"
+started=$(date +%s)
+if agent-answer ws/7 bad >"$tmp/out" 2>"$tmp/error"; then exit 1; fi
+[ $(( $(date +%s) - started )) -lt 5 ]
+waiting=$(waiting_questions "$AGENT_JOB" ws)
+[ -z "$waiting" ]
+[ $(( $(date +%s) - started )) -lt 5 ]
+rm "$AGENT_JOB/sessions/1.json"
+printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$AGENT_JOB/sessions/1.json"
 
 # The host-side waiter wakes on a question from a running reader session.
 printf '%s\n' '{"n":1,"state":"finished","read_only":true}' >"$AGENT_JOB/sessions/1.json"
