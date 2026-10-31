@@ -36,41 +36,46 @@ run="${AGENT_RUNS:-/var/lib/agent-runs}/$ws"
 if [ -n "$n" ]; then
     selected_ref="$ws/$n"
 else
-    if workspace=$("$tool/bin/agent-result" "$ws"); then :; else :; fi
+    workspace=$("$tool/bin/agent-result" "$ws") || :
     printf '%s\n' "$workspace" | jq -e 'type == "object" and (.sessions | type) == "array"' >/dev/null 2>&1 ||
         person 'session result unavailable'
-    selected=$(printf '%s\n' "$workspace" | jq -c '[.sessions[] | select(.read_only == true)] | sort_by(.n) | last // empty')
+    selected=$(printf '%s\n' "$workspace" | jq -c '[.sessions[] | select(.read_only == true)] | sort_by(.n) | last // empty') ||
+        person 'session result unavailable'
     [ -n "$selected" ] || person 'no review'
-    selected_n=$(printf '%s\n' "$selected" | jq -r '.n | if type == "number" and . > 0 and floor == . then tostring else empty end')
+    selected_n=$(printf '%s\n' "$selected" | jq -r '.n | if type == "number" and . > 0 and floor == . then tostring else empty end') ||
+        person 'session result unavailable'
     case "$selected_n" in '' | 0* | *[!0-9]*) person 'session result unavailable' ;; esac
     [ "${#selected_n}" -le 15 ] || person 'session result unavailable'
     selected_ref="$ws/$selected_n"
 fi
 
 if [ "$wait" -eq 1 ]; then
-    if record=$("$tool/bin/agent-result" "$selected_ref" --wait); then :; else :; fi
+    record=$("$tool/bin/agent-result" "$selected_ref" --wait) || :
 else
-    if record=$("$tool/bin/agent-result" "$selected_ref"); then :; else :; fi
+    record=$("$tool/bin/agent-result" "$selected_ref") || :
 fi
 printf '%s\n' "$record" | jq -e 'type == "object"' >/dev/null 2>&1 || person 'no review'
-read_only=$(printf '%s\n' "$record" | jq -r '.read_only == true')
+read_only=$(printf '%s\n' "$record" | jq -r '.read_only == true') || person 'session result unavailable'
 [ "$read_only" = true ] || person 'session is not read-only'
-state=$(printf '%s\n' "$record" | jq -r '.state // ""')
+state=$(printf '%s\n' "$record" | jq -r '.state // ""') || person 'session result unavailable'
 case "$state" in
     preparing | running) person 'session not finished' ;;
     finished) ;;
+    stopped) person 'session stopped' ;;
     *) person 'session failed' ;;
 esac
 
 verdict=$(printf '%s\n' "$record" | jq -r -L "$tool/lib" '
     include "agent-review";
-    if (.review | valid_review_report) then .review.verdict else empty end')
+    if (.review | valid_review_report) then .review.verdict else empty end') ||
+    person 'review unparsed'
 case "$verdict" in
     land) printf '%s\n' "$verdict"; exit 0 ;;
     'land after fixes') printf '%s\n' "$verdict"; exit 10 ;;
     'do not land') printf '%s\n' "$verdict"; exit 11 ;;
     '')
-        has_review=$(printf '%s\n' "$record" | jq -r 'has("review") and .review != null')
+        has_review=$(printf '%s\n' "$record" | jq -r 'has("review") and .review != null') ||
+            person 'session result unavailable'
         if [ "$has_review" = true ]; then person 'review unparsed'; else person 'no review'; fi
         ;;
     *) person 'review verdict unrecognised' ;;
