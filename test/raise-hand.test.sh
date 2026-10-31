@@ -45,14 +45,18 @@ exec /usr/bin/dd "$@"
 EOF
 cat >"$tmp/bin/cat" <<'EOF'
 #!/bin/sh
-if [ -n "${SWAP_ANSWER_INPUT:-}" ] && [ "$1" = "$SWAP_ANSWER_INPUT" ]; then
+exec /bin/cat "$@"
+EOF
+cat >"$tmp/bin/wc" <<'EOF'
+#!/bin/sh
+if [ -n "${SWAP_ANSWER_INPUT:-}" ] && [ "$1" = -c ] && [ -n "$2" ]; then
     mv "$AGENT_JOB/questions" "$SWAP_QUESTION_DIR"
     ln -s "$SWAP_QUESTION_TARGET" "$AGENT_JOB/questions"
     unset SWAP_ANSWER_INPUT
 fi
-exec /bin/cat "$@"
+exec /usr/bin/wc "$@"
 EOF
-chmod +x "$tmp/bin/dd" "$tmp/bin/cat"
+chmod +x "$tmp/bin/dd" "$tmp/bin/cat" "$tmp/bin/wc"
 export PATH="$tmp/bin:$tool/bin:$PATH"
 . "$tool/lib/agent-questions.sh"
 agent_unit_active() { return 0; }
@@ -162,8 +166,16 @@ mv "$tmp/sessions-pinned" "$AGENT_JOB/sessions"
 unset SWAP_SESSION_DIR SWAP_SESSION_TARGET
 printf '%s\n' '{"n":1,"state":"running","read_only":true}' >"$AGENT_JOB/sessions/1.json"
 
-# The answer is created in the pinned questions directory, not a swapped target.
+# A text answer is not reinterpreted as a file in the pinned question directory.
 mkdir "$tmp/answer-target"
+printf '%s\n' 'planted contents' >"$AGENT_JOB/questions/yes"
+printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/12.md"
+printf '%s\n' 1 >"$AGENT_JOB/questions/12.session"
+agent-answer ws/12 yes
+[ "$(cat "$AGENT_JOB/questions/12.answer")" = yes ]
+rm "$AGENT_JOB/questions/yes" "$AGENT_JOB/questions/12.answer"
+
+# The answer is created in the pinned questions directory, not a swapped target.
 printf '%s\n' 'ordinary question' >"$AGENT_JOB/questions/11.md"
 printf '%s\n' 1 >"$AGENT_JOB/questions/11.session"
 printf '%s\n' answer >"$tmp/answer-input"
