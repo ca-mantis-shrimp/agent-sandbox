@@ -32,7 +32,7 @@ grep -Fq 'Finding-Open: 1#1' "$tmp/show"
 [ "$(cut -f4 "$tmp/pending")" = "$commit" ]
 "$tool/bin/agent" show - <"$tmp/pending" >"$tmp/stdin"
 cmp "$tmp/show" "$tmp/stdin"
-printf 'ws\tignored\nsecond\n' | "$tool/bin/agent-verdict" - --agree
+printf 'ws\tignored\nsecond\n' | "$tool/bin/agent-verdict" - --by human --agree
 jq -e '.human_verdict.agrees_with_review' "$AGENT_RUNS/ws/manifest.json" >/dev/null
 if printf '\n' | "$tool/bin/agent" show -; then exit 1; fi
 echo 'show tests passed'

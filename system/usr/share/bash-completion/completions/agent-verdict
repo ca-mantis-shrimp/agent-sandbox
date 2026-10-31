@@ -3,6 +3,8 @@ _agent_verdict() {
     local cur=${COMP_WORDS[COMP_CWORD]}
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=($(compgen -W "$(agent-verdict --pending 2>/dev/null | cut -f1) --pending --feedback" -- "$cur"))
+    elif [ "${COMP_WORDS[COMP_CWORD-1]}" = --by ]; then
+        COMPREPLY=($(compgen -W "human facilitator orchestrator" -- "$cur"))
     else
         COMPREPLY=($(compgen -W "--agree --disagree --on --overrule --missed --note --by" -- "$cur"))
     fi

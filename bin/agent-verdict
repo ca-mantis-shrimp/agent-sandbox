@@ -1,17 +1,17 @@
 #!/bin/sh
 # Record a judge's call, including after landing; no interactive prompts.
-# Usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
+# Usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator|orchestrator]
 #        [--overrule <text>]... [--missed <text>]... [--note <text>]
-#        agent-verdict <workspace> --on <finding> [--agree|--disagree] [--note <text>]
+#        agent-verdict <workspace> --on <finding> [--agree|--disagree] [--by human|facilitator|orchestrator] [--note <text>]
 # Without --agree or --disagree it records nothing and prints help: a bare run
 # once recorded "disagrees" by default (2026-10-25).
 set -eu
 say() { echo "agent-verdict > $*" >&2; }
 usage() {
     cat <<'HELP'
-usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator]
+usage: agent-verdict <workspace> --agree|--disagree [--by human|facilitator|orchestrator]
                      [--overrule <text>]... [--missed <text>]... [--note <text>]
-       agent-verdict <workspace> --on <finding> [--agree|--disagree] [--note <text>]
+       agent-verdict <workspace> --on <finding> [--agree|--disagree] [--by human|facilitator|orchestrator] [--note <text>]
        agent-verdict --pending
        agent-verdict --feedback [<time>]
 
@@ -26,7 +26,7 @@ replaces that judge's earlier verdict without changing another judge's verdict.
   --on <finding>        give feedback on one finding instead, by its id (2#1):
                         agree, disagree or only a --note. Appends, and leaves
                         the landing waiting for its verdict
-  --by                  who judges: human (default) or facilitator
+  --by                  who judges: human (default only on a terminal), facilitator or orchestrator
   --pending             list landings waiting for your verdict, newest first:
                         workspace id, repository, label, landed commit (tab-separated)
   --feedback [<time>]   list the human's verdicts and finding comments recorded
@@ -74,12 +74,13 @@ fi
 ws=$(workspace_id_input "$1") || { say 'missing workspace on stdin'; exit 2; }
 shift
 case "$ws" in "" | . | .. | *[!a-zA-Z0-9_-]*) say "invalid workspace: $ws"; exit 2 ;; esac
-by=human agree='' overruled='[]' missed='[]' note='' finding=''
+by=human by_set=false agree='' overruled='[]' missed='[]' note='' finding=''
 while [ $# -gt 0 ]; do
     case "$1" in
         --by)
-            by=${2:?--by needs human or facilitator}
-            case "$by" in human | facilitator) ;; *) say "unknown judge: $by"; exit 2 ;; esac
+            by=${2:?--by needs human, facilitator or orchestrator}
+            case "$by" in human | facilitator | orchestrator) ;; *) say "unknown judge: $by"; exit 2 ;; esac
+            by_set=true
             shift 2 ;;
         --agree | --disagree)
             v=true; [ "$1" = --agree ] || v=false
@@ -105,6 +106,10 @@ elif [ -z "$agree" ]; then
     # Other flags without a judgment are a mistake; no flags at all ask for help.
     [ -z "$note" ] && [ "$overruled" = '[]' ] && [ "$missed" = '[]' ] || { say "say --agree or --disagree; nothing recorded"; exit 2; }
     usage; exit 0
+fi
+if [ "$by_set" != true ] && [ ! -t 0 ]; then
+    say 'stdin is not a terminal; specify --by human, facilitator or orchestrator; nothing recorded'
+    exit 2
 fi
 run="$(runs_dir)/$ws"
 [ -f "$run/manifest.json" ] || { say "unknown workspace: $ws"; exit 1; }
