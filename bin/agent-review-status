@@ -1,0 +1,82 @@
+#!/bin/sh
+# Turn a review session's parsed verdict into a workflow-friendly exit status.
+# Usage: agent-review-status <workspace>[/<n>] [--wait]
+# 0 land; 10 land after fixes; 11 do not land; 12 needs a person; 2 usage/workspace error.
+set -eu
+
+say() { echo "agent-review-status > $*" >&2; }
+person() { printf '%s\n' "needs person: $1"; exit 12; }
+usage() { say 'usage: agent-review-status <workspace>[/<n>] [--wait]'; exit 2; }
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+ref=$1
+wait=0
+if [ "$#" -eq 2 ]; then
+    [ "$2" = --wait ] || usage
+    wait=1
+fi
+ws=${ref%%/*}
+n=
+case "$ref" in
+    */*)
+        case "$ref" in */*/*) usage ;; esac
+        n=${ref#*/}
+        case "$n" in '' | 0* | *[!0-9]*) usage ;; esac
+        [ "${#n}" -le 15 ] || usage
+        ;;
+esac
+case "$ws" in '' | . | .. | *[!a-zA-Z0-9_-]*) usage ;; esac
+
+tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
+run="${AGENT_RUNS:-/var/lib/agent-runs}/$ws"
+[ -f "$run/manifest.json" ] || { say "no workspace: $ws"; exit 2; }
+
+# agent-result owns record enrichment and closing-report parsing. Its nonzero
+# statuses (failed or running sessions) still accompany useful JSON, so retain
+# stdout and make the decision from that record rather than its process status.
+if [ -n "$n" ]; then
+    selected_ref="$ws/$n"
+else
+    workspace=$("$tool/bin/agent-result" "$ws") || :
+    printf '%s\n' "$workspace" | jq -e 'type == "object" and (.sessions | type) == "array"' >/dev/null 2>&1 ||
+        person 'session result unavailable'
+    selected=$(printf '%s\n' "$workspace" | jq -c '[.sessions[] | select(.read_only == true)] | sort_by(.n) | last // empty') ||
+        person 'session result unavailable'
+    [ -n "$selected" ] || person 'no review'
+    selected_n=$(printf '%s\n' "$selected" | jq -r '.n | if type == "number" and . > 0 and floor == . then tostring else empty end') ||
+        person 'session result unavailable'
+    case "$selected_n" in '' | 0* | *[!0-9]*) person 'session result unavailable' ;; esac
+    [ "${#selected_n}" -le 15 ] || person 'session result unavailable'
+    selected_ref="$ws/$selected_n"
+fi
+
+if [ "$wait" -eq 1 ]; then
+    record=$("$tool/bin/agent-result" "$selected_ref" --wait) || :
+else
+    record=$("$tool/bin/agent-result" "$selected_ref") || :
+fi
+printf '%s\n' "$record" | jq -e 'type == "object"' >/dev/null 2>&1 || person 'no review'
+read_only=$(printf '%s\n' "$record" | jq -r '.read_only == true') || person 'session result unavailable'
+[ "$read_only" = true ] || person 'session is not read-only'
+state=$(printf '%s\n' "$record" | jq -r '.state // ""') || person 'session result unavailable'
+case "$state" in
+    preparing | running) person 'session not finished' ;;
+    finished) ;;
+    stopped) person 'session stopped' ;;
+    *) person 'session failed' ;;
+esac
+
+verdict=$(printf '%s\n' "$record" | jq -r -L "$tool/lib" '
+    include "agent-review";
+    if (.review | valid_review_report) then .review.verdict else empty end') ||
+    person 'review unparsed'
+case "$verdict" in
+    land) printf '%s\n' "$verdict"; exit 0 ;;
+    'land after fixes') printf '%s\n' "$verdict"; exit 10 ;;
+    'do not land') printf '%s\n' "$verdict"; exit 11 ;;
+    '')
+        has_review=$(printf '%s\n' "$record" | jq -r 'has("review") and .review != null') ||
+            person 'session result unavailable'
+        if [ "$has_review" = true ]; then person 'review unparsed'; else person 'no review'; fi
+        ;;
+    *) person 'review verdict unrecognised' ;;
+esac
