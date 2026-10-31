@@ -8,11 +8,21 @@ mkdir -p "$tmp/tool/bin" "$tmp/tool/lib" "$tmp/runs/ws/sessions"
 cp "$tool/bin/agent-review-status" "$tmp/tool/bin/"
 cp "$tool/bin/agent-result" "$tmp/tool/bin/"
 cp "$tool/lib/agent-runs.sh" "$tool/lib/agent-systemd.sh" "$tool/lib/agent-review.jq" "$tmp/tool/lib/"
-printf '#!/bin/sh\nexit 0\n' >"$tmp/tool/bin/agent-reconcile"
+cat >"$tmp/tool/bin/agent-reconcile" <<'STUB'
+#!/bin/sh
+count_file="$AGENT_RUNS/reconcile-count"
+count=$(cat "$count_file" 2>/dev/null || printf 0)
+count=$((count + 1))
+printf '%s\n' "$count" >"$count_file"
+if [ "$count" -eq 2 ] && [ -f "$AGENT_RUNS/ws/sessions/7.json" ]; then
+    jq '.state = "finished"' "$AGENT_RUNS/ws/sessions/7.json" >"$AGENT_RUNS/ws/sessions/7.tmp"
+    mv "$AGENT_RUNS/ws/sessions/7.tmp" "$AGENT_RUNS/ws/sessions/7.json"
+fi
+STUB
 chmod +x "$tmp/tool/bin/agent-reconcile"
-# agent-result only reaches systemctl when a running record is waited on.
+# The real --wait path sees a stopped unit, then reconciliation finalizes its record.
 mkdir "$tmp/stubs"
-printf '#!/bin/sh\nprintf "active\\n"\n' >"$tmp/stubs/systemctl"
+printf '#!/bin/sh\nprintf "inactive\\n"\n' >"$tmp/stubs/systemctl"
 chmod +x "$tmp/stubs/systemctl"
 export PATH="$tmp/stubs:$PATH" AGENT_RUNS="$tmp/runs"
 report() {
@@ -85,8 +95,8 @@ status=$?
 set -e
 [ "$status" -eq 2 ] && [ -z "$output" ]
 # Exercise the real agent-result implementation with --wait for the latest review.
-rm -f "$tmp/runs/ws/sessions/"*.json
-record 7 true finished land
+rm -f "$tmp/runs/ws/sessions/"*.json "$tmp/runs/reconcile-count"
+record 7 true running land
 set +e
 output=$(run ws --wait 2>"$tmp/err")
 status=$?
