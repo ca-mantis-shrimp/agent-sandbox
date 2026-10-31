@@ -1,0 +1,10 @@
+# review 20261031-021929/2: land after fixes by claude-opus-5-5
+.clearhead/charters/next.actions:34: should-fix: 2#1 =fix-answering-unknown is marked done as 'implementation was already present' without explaining the reported 'answering review unknown' for 20261025-204553/3 — The AGENT_REVIEW_SESSION handoff existed since e6e7c96, before that workspace was created, and no later record rewrite drops review_session, so the field failure came from a path the new tests do not cover (e.g. a direct agent-run launch or an older pinned host revision). Closing the action loses the bug; reopen it or record the actual cause after inspecting the host record.
+test/fix.test.sh:18: nit: 2#2 The stub agent-run parses a --review-session flag that agent-fix never passes — Dead code in the stub that implies an interface which does not exist; the attribution only comes from AGENT_REVIEW_SESSION.
+test/fix.test.sh:110: nit: 2#3 External review id is taken via find | while jq | tail -n 1 over unsorted find output — Convoluted and order-dependent; the test already asserts exactly one review file, so reading reviews/*.json directly or the id from the prompt's Target line is simpler.
+# fix 20261031-021929/3 by gpt-6-luna, answering review 2
+fixed: 2#1
+# review 20261031-021929/4: land by claude-opus-5-5
+test/fix.test.sh:15: nit: 4#1 Stub agent-run parses a --review-session flag that agent-fix never passes — Dead branch suggests a nonexistent interface; only the AGENT_REVIEW_SESSION env fallback is exercised
+test/fix.test.sh:110: nit: 4#2 External review id found via find|while jq|tail -n 1, relying on unspecified find order — Correct only because exactly one review file exists; reading workspace_json .reviews[0].id (or asserting the count first) is simpler and order-independent
+.clearhead/charters/next.actions:34: nit: 4#3 Reopen note says 'The implemented handoff ... remain', but this branch implemented no handoff — The handoff predates the branch (e6e7c96); this branch only adds regression tests, and the wording may mislead whoever closes the action
