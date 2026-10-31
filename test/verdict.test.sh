@@ -237,4 +237,11 @@ if command -v bash >/dev/null; then
     ' _ "$tool/system/usr/share/bash-completion/completions/agent-verdict")
     [ "$out" = "$(printf '20261002-000000\n20261001-000000\n--agree\norchestrator')" ]
 fi
+# A real pseudo-terminal exercises the human default; the command must record
+# the verdict, not merely avoid the nonterminal refusal.
+SHELL=/bin/sh script -q -e -c "AGENT_RUNS='$tmp/finding-runs' AGENT_VERDICT_HOOK= '$verdict' ws --agree" /dev/null \
+    >"$tmp/out" 2>"$tmp/err"
+jq -e '.human_verdict.agrees_with_review == true and .human_verdict.note == ""' "$manifest" >/dev/null
+git -C "$repo" notes --ref=verdict show "$landed_commit" >"$tmp/verdict-note"
+grep -Fqx '# verdict: human agrees with the review ('"$(jq -r .human_verdict.at "$manifest")"')' "$tmp/verdict-note"
 echo 'agent-verdict.test > ok'
