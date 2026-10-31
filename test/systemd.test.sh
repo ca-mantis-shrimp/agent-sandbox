@@ -189,7 +189,8 @@ fails "$tool/bin/agent-run" --in ws --prompt review --read-only
 "$tool/bin/agent-stop" ws/1
 "$tool/bin/agent-result" ws/1 >"$tmp/result" && exit 1
 jq -e '.state == "stopped"' "$tmp/result" >/dev/null
-[ "$(AGENT_PI_PROVIDER=launch-provider AGENT_PI_MODEL=launch-model "$tool/bin/agent-run" --in ws --harness pi --prompt work)" = ws/2 ]
+[ "$(AGENT_REVIEW_SESSION=1 AGENT_PI_PROVIDER=launch-provider AGENT_PI_MODEL=launch-model "$tool/bin/agent-run" --in ws --harness pi --prompt work)" = ws/2 ]
+jq -e '.review_session == "1"' "$run/sessions/2.json" >/dev/null
 grep -qxF 'AGENT_PI_PROVIDER="launch-provider"' "$run/run.env"
 grep -qxF 'AGENT_MODEL="launch-model"' "$run/run.env"
 [ ! -L "$run/review/work" ]
