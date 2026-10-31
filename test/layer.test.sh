@@ -42,14 +42,18 @@ echo "stray" >"$tmp/recipe/mkosi.extra/keep"
 layer harness h "$tmp/recipe" >"$tmp/out" 2>"$tmp/err"
 grep -q 'building h: no record' "$tmp/out"
 # build output goes to the log, not the terminal
-! grep -qv "^agent-layer > " "$tmp/out" "$tmp/err"
+if grep -qv "^agent-layer > " "$tmp/out" "$tmp/err"; then
+    echo 'unexpected agent-layer output outside the prefixed log' >&2; exit 1
+fi
 grep -q 'mkosi chatter' "$AGENT_LAYERS/.build/h.log"
 [ -f "$AGENT_LAYERS/h.raw" ] && [ -f "$AGENT_LAYERS/h-etc.raw" ] && [ ! -d "$AGENT_LAYERS/.build/h" ]
 grep -q -- "--package-cache-directory=$AGENT_LAYERS/.cache/packages/h" "$tmp/log"
 [ -s "$AGENT_LAYERS/.cache/packages/h/probe" ]
 grep -q -- '--snapshot=2026/10/04' "$tmp/log"
 grep -q -- '--tools-tree-snapshot=2026/10/04' "$tmp/log"
-! grep -q -- '--tools-tree=' "$tmp/log"
+if grep -q -- '--tools-tree=' "$tmp/log"; then
+    echo 'unexpected tools-tree argument for a snapshot build' >&2; exit 1
+fi
 [ -f "$AGENT_LAYERS/.tools/2026.10.04/usr/tool" ]
 r=$AGENT_LAYERS/h.build.json
 [ "$(jq -c '.packages' "$r")" = '[{"name":"nodejs","version":"22"}]' ]
@@ -63,7 +67,9 @@ layer harness h "$tmp/recipe" | grep -q 'h up to date (built 20'
 : >"$tmp/log"
 layer harness h "$tmp/recipe" --force | grep -q 'building h: forced'
 grep -q -- "--tools-tree=$AGENT_LAYERS/.tools/2026.10.04" "$tmp/log"
-! grep -q -- '--tools-tree-snapshot' "$tmp/log"
+if grep -q -- '--tools-tree-snapshot' "$tmp/log"; then
+    echo 'unexpected tools-tree-snapshot argument for a tools-tree build' >&2; exit 1
+fi
 [ "$(jq -r .tools_tree "$r")" = "$AGENT_LAYERS/.tools/2026.10.04" ]
 echo more >"$tmp/recipe/mkosi.conf"
 layer harness h "$tmp/recipe" | grep -q 'building h: recipe changed'
