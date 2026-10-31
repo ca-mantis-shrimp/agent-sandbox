@@ -110,6 +110,7 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | start any task in a new workspace | `agent-run --prompt <file\|text>` |
 | add a session | `agent-run --in <workspace> --prompt <file\|text> [--harness pi] [--model <id>] [--read-only] [--label <text>] [--wait]` |
 | read JSON results | `agent-result <workspace>[/<n>] [--wait]` |
+| branch on a review | `agent-review-status <workspace>[/<n>] [--wait]` |
 | fix a review | `agent-fix <workspace>[/<n>] [--review <file> --reviewer <name>] [--harness claude\|pi] [--model <id>] [--note <file\|text>] [--nits] [--wait]` |
 | list landings awaiting a human verdict | `agent-verdict --pending` (workspace, repository, label, landed commit; tab-separated) |
 | list the human's review feedback, so someone reads it | `agent-verdict --feedback [<time>]` (time, workspace, repository, label, review or finding id, stance, note; tab-separated, oldest first) |
@@ -225,6 +226,7 @@ commit or merge conflict is preferable to a garbled action line.
    ```
 
 4. Read the review, then use `agent-fix <workspace>[/<n>]` for blocking and should-fix findings. Without a session number it selects the latest read-only session with a parsed review. `--nits` includes nits; `--note` supplies human decisions. An external review can instead be supplied with `--review <file> --reviewer <name>` (not with a session number); it is retained in `reviews/`.
+A workflow can use `agent-review-status <workspace>[/<n>] [--wait]` to branch on a review without treating a clean session exit as approval. It prints the verdict (or a `needs person: ...` state) on one line: exit 0 means `land`, 10 means `land after fixes`, 11 means `do not land`, 12 means a person must decide (including an unparsed/missing review, failed or unfinished session, or non-read-only session), and 2 means invalid usage or no such workspace. Without `<n>`, it checks the latest read-only session even when that review is unparsed; `--wait` waits for that session via `agent-result`. Unknown verdicts never authorize landing.
 5. Check fixes. A fix does not reconcile a finding; the human records reconciliation after checking it. Reviews advise landing, not gate it.
 6. Run `agent-harvest <workspace>` when no session is running; it fetches branches in each repo and shows commits and closing messages without merging. Harvest again after further sessions.
 7. Run `agent-land <workspace>`. Before merging, it checks the harvested branch's test-commit file locks in every repository (see below). It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
