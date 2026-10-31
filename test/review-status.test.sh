@@ -85,6 +85,7 @@ status=$?
 set -e
 [ "$status" -eq 2 ] && [ -z "$output" ]
 # Exercise the real agent-result implementation with --wait for the latest review.
+rm -f "$tmp/runs/ws/sessions/"*.json
 record 7 true finished land
 set +e
 output=$(run ws --wait 2>"$tmp/err")
