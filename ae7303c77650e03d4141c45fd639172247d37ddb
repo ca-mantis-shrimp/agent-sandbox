@@ -1,0 +1,9 @@
+# review 20261031-072130/2: land after fixes by claude-opus-5-5
+README.md:250: should-fix: 2#1 README still documents `agent verdict - --agree` for pipelines from `agent verdict --pending` through a selector, without --by — in that pipeline stdin is a pipe, so the new check refuses it with exit 2; the documented human workflow now fails and the example needs `--by human`
+test/verdict.test.sh:163: nit: 2#2 tests and implementation were committed together in one fix(verdict) commit instead of a separate test-first `test:` commit — the AGENTS.md ground rules ask for test-first changes in a separate test-prefixed commit; the landing lock does not enforce it here, but the history does not follow the rule
+test/verdict.test.sh:163: nit: 2#3 nothing tests that the default is still human when stdin is a terminal — tests run without a terminal, so only the refusal side of the `-t 0` check is exercised; a regression that always refuses would go unnoticed
+# fix 20261031-072130/3 by gpt-6-luna, answering review 2
+fixed: 2#1
+# review 20261031-072130/4: land by claude-opus-5-5
+test/verdict.test.sh:163: nit: 4#1 The acceptance tests went into the fix commit f1668f7 instead of a separate test: commit before it. — AGENTS.md asks for test-first changes in their own test: commit; without one, agent-land's test-commit lock does not protect these tests.
+bin/agent-verdict:110: nit: 4#2 No test covers the terminal side of the rule: a call without --by on a real terminal should still record a human verdict. — A later change could make the terminal default fail without any test noticing; a pseudo-terminal test (e.g. script(1)) would cover it.
