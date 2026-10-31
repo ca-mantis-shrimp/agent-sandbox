@@ -15,12 +15,16 @@ cat >"$tmp/bin/dd" <<'EOF'
 #!/bin/sh
 for arg do
     case "$arg" in
-        "if=${SWAP_QUESTION_FILE:-}")
-            if [ -n "${SWAP_QUESTION_FILE:-}" ]; then
+        if=*)
+            actual=${arg#if=}
+            if [ -n "${SWAP_QUESTION_FILE:-}" ] &&
+                [ "${actual##*/}" = "${SWAP_QUESTION_FILE##*/}" ]; then
                 rm -f -- "$SWAP_QUESTION_FILE"
                 ln -s "$SWAP_VICTIM" "$SWAP_QUESTION_FILE"
             fi
             ;;
+    esac
+    case "$arg" in
         */8.md|if=8.md)
             if [ -n "${SWAP_QUESTION_DIR:-}" ]; then
                 mv "$AGENT_JOB/questions" "$SWAP_QUESTION_DIR"
