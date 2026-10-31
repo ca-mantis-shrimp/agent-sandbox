@@ -52,27 +52,40 @@ record 2 true finished unparsed
 expect ws 'needs person: review unparsed' 12
 record 4 true failed land
 expect ws 'needs person: session failed' 12
+record 4 true stopped land
+expect ws 'needs person: session stopped' 12
 record 4 true running land
 expect ws 'needs person: session not finished' 12
 record 2 false finished land
 expect ws/2 'needs person: session is not read-only' 12
 expect ws/99 'needs person: no review' 12
+# No read-only sessions in the workspace.
+rm -f "$tmp/runs/ws/sessions/"*.json
+record 6 false finished land
+expect ws 'needs person: no review' 12
+# A finished read-only record without a JSON review block is still no review.
+jq -n '{n:7,read_only:true,state:"finished",closing:"No structured review here."}' >"$tmp/runs/ws/sessions/7.json"
+expect ws/7 'needs person: no review' 12
+# A malformed stored review must not leak jq's status as a workflow result.
+jq -n '{n:8,read_only:true,state:"finished",review:{coverage:[1],findings:[],for_human:[],verdict:"land"}}' >"$tmp/runs/ws/sessions/8.json"
+expect ws/8 'needs person: review unparsed' 12
+# A malformed workspace session element must also map to the human-decision code.
+cp "$tmp/tool/bin/agent-result" "$tmp/tool/bin/agent-result.real"
+cat >"$tmp/tool/bin/agent-result" <<'STUB'
+#!/bin/sh
+printf '{"sessions":[17]}\n'
+STUB
+chmod +x "$tmp/tool/bin/agent-result"
+expect ws 'needs person: session result unavailable' 12
+mv "$tmp/tool/bin/agent-result.real" "$tmp/tool/bin/agent-result"
 # A missing workspace is a usage/data error, distinct from a review decision.
 set +e
 output=$(run missing 2>"$tmp/err")
 status=$?
 set -e
 [ "$status" -eq 2 ] && [ -z "$output" ]
-# Wait is forwarded to agent-result for the selected session.
-cat >"$tmp/tool/bin/agent-result" <<'STUB'
-#!/bin/sh
-case "$*" in
-    'ws') printf '{"sessions":[{"n":7,"read_only":true,"state":"running"}]}\n' ;;
-    'ws/7 --wait') report='{"coverage":[],"findings":[],"for_human":[],"verdict":"land"}'; jq -cn --arg report "$report" '{n:7,read_only:true,state:"finished",review:($report|fromjson),closing:("```json\n"+$report+"\n```")}';;
-    *) echo "unexpected agent-result args: $*" >&2; exit 2 ;;
-esac
-STUB
-chmod +x "$tmp/tool/bin/agent-result"
+# Exercise the real agent-result implementation with --wait for the latest review.
+record 7 true finished land
 set +e
 output=$(run ws --wait 2>"$tmp/err")
 status=$?
