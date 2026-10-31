@@ -1,0 +1,60 @@
+#!/bin/sh
+# Ask one question of the session's launcher and wait without model polling.
+set -eu
+say() { echo "agent-ask > $*" >&2; }
+[ "$#" -eq 1 ] || { say 'usage: agent-ask <question>'; exit 2; }
+job=${AGENT_JOB:?AGENT_JOB is required}
+session=${AGENT_SESSION:?AGENT_SESSION is required}
+case "$session" in ''|0*|*[!0-9]*) say 'invalid session number'; exit 2 ;; esac
+[ "${#session}" -le 15 ] || { say 'invalid session number'; exit 2; }
+question=$1
+timeout=${AGENT_QUESTION_TIMEOUT_SECS:-900}
+case "$timeout" in ''|0*|*[!0-9]*) say 'AGENT_QUESTION_TIMEOUT_SECS must be a positive integer'; exit 2 ;; esac
+[ "${#timeout}" -le 4 ] && [ "$timeout" -le 3600 ] || {
+    say 'AGENT_QUESTION_TIMEOUT_SECS must not exceed 3600'; exit 2;
+}
+questions="$job/questions"
+if [ -L "$questions" ] || { [ -e "$questions" ] && [ ! -d "$questions" ]; }; then
+    say "refusing unsafe questions directory: $questions"; exit 1
+fi
+mkdir -p "$questions"
+q=1
+while [ -e "$questions/$q.md" ] || [ -L "$questions/$q.md" ] ||
+      [ -e "$questions/$q.answer" ] || [ -L "$questions/$q.answer" ] ||
+      [ -e "$questions/$q.session" ] || [ -L "$questions/$q.session" ] ||
+      [ -e "$questions/$q.timeout" ] || [ -L "$questions/$q.timeout" ]; do
+    [ "$q" -lt 999999999999999 ] || { say 'question id space exhausted'; exit 1; }
+    q=$((q + 1))
+done
+if [ "$(printf '%s' "$question" | wc -c)" -gt 65535 ]; then
+    say 'question exceeds 65536 bytes'; exit 1
+fi
+(umask 002; set -C; printf '%s\n' "$session" >"$questions/$q.session") || {
+    say 'could not create question session record'; exit 1;
+}
+if ! (umask 002; set -C; printf '%s\n' "$question" >"$questions/$q.md"); then
+    rm -f "$questions/$q.session"
+    say 'could not create question'; exit 1
+fi
+
+say "waiting for answer to $q (timeout ${timeout}s)"
+started=$(date +%s)
+while :; do
+    answer="$questions/$q.answer"
+    if [ -e "$answer" ] || [ -L "$answer" ]; then
+        [ ! -L "$answer" ] && [ -f "$answer" ] || { say "refusing unsafe answer: $answer"; exit 1; }
+        bytes=$(wc -c <"$answer")
+        [ "$bytes" -le 65536 ] || { say "refusing oversized answer: $answer"; exit 1; }
+        cat "$answer"
+        exit 0
+    fi
+    now=$(date +%s)
+    if [ "$((now - started))" -ge "$timeout" ]; then
+        (umask 002; set -C; : >"$questions/$q.timeout") || {
+            say 'could not mark timed-out question'; exit 1;
+        }
+        say 'timed out; take the NEEDS DECISION stop'
+        exit 1
+    fi
+    sleep 2
+done

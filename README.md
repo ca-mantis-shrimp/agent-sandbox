@@ -122,12 +122,36 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | stop sessions gracefully | `agent-stop <workspace>[/<n>]` |
 | discard a workspace with no commits | `agent-retire <workspace>` |
 | read completed-session token usage as JSON | `agent-usage <workspace>[/<n>]` |
-| see workspaces or recent tool calls | `agent-status [<workspace> [n]]` |
+| see workspaces, recent tool calls and questions | `agent-status [<workspace> [n]]` |
+| wait until a running session asks a question | `agent-status --wait-question` |
+| answer a session question | `agent-answer <workspace>/<question> <text\|file>` |
 | check whether a repository is held | `agent-status --held <repo-path>` |
 | explicitly install the host commit guard | `agent-doctor --install-hooks <repo-path>` |
 | check this host's setup | `agent-doctor` |
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
+
+### Session questions
+
+Work, review and fix sessions can call `/srv/agents/agent-ask "question"` once
+when they need context from their launcher. The helper writes an untrusted
+`questions/<id>.md` outside `work/` and blocks without model polling until the
+host writes `questions/<id>.answer`. It prints the answer as plain text; it never
+runs it. `agent-status` displays unanswered questions from running sessions,
+including a sanitized first line and a per-workspace count. A facilitator can
+block in `agent-status --wait-question` and answer with
+`agent-answer <workspace>/<id> "text"` or a file. Answers are never overwritten.
+
+The default wait is 900 seconds; set `AGENT_QUESTION_TIMEOUT_SECS` in the
+launcher environment to a positive value no greater than 3600 seconds. A timeout
+exits non-zero, marks the question with `<id>.timeout`, and tells the session to
+take the normal `NEEDS DECISION` stop. Timed-out questions are excluded from the
+host's waiting list and cannot be answered. This leaves time before the unit's
+six-hour maximum. Question and answer files are
+capped at 65536 bytes. Questions are data only, not commands or terminal input;
+the host refuses symlinks, non-regular files and oversized questions rather
+than reading them. The session holds its unit, workspace lock and deadline while
+waiting, so ask only when the answer can unblock worthwhile work.
 
 Host commands never run Git in agent-writable clones. Writers export plain data inside the sandbox; harvest fetches bundles into real repositories. Missing or invalid commit exports are reported as JSON `null` (unknown), and harvest/land refuse them. Read-only and gate sessions do not export. Harvest and land require the latest writer's valid export, never an older writer's: SIGKILL or OOM can prevent the EXIT trap from exporting. If they report `session <n> left no export (killed?)`, run a short writer to export the retained commits, for example `agent-run --in <ws> --prompt "Commit nothing; end."`, then harvest again. Bundles are named `root.bundle` for the root and `sm-<URI-encoded-path>.bundle` for submodules.
 

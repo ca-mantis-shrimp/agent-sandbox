@@ -75,7 +75,7 @@ for database in passwd group; do
     GETENT_FAIL=$database fails write_agent_run "$run" /repo/example pi model 2 false 2>"$tmp/error"
     grep -q "getent $database .* failed" "$tmp/error"
 done
-AGENT_SESSION_USD=5 write_agent_run "$run" /repo/example claude 'a "model"' 1 true
+AGENT_SESSION_USD=5 AGENT_QUESTION_TIMEOUT_SECS=123 write_agent_run "$run" /repo/example claude 'a "model"' 1 true
 [ "$(readlink "$run/root")" = "$AGENT_BASE" ]
 [ "$(readlink "$run/cache")" = "$AGENT_RUNS/.cache/example" ]
 [ -d "$run/cache" ]
@@ -90,12 +90,13 @@ AGENT_SESSION_USD=5 write_agent_run "$run" /repo/example claude 'a "model"' 1 tr
 [ "$(readlink "$run/review/work")" = ../work ]
 grep -qxF 'AGENT_MODEL="a \"model\""' "$run/run.env"
 grep -qxF 'AGENT_SESSION_USD="5"' "$run/run.env"
+grep -qxF 'AGENT_QUESTION_TIMEOUT_SECS="123"' "$run/run.env"
 [ "$(stat -c %a "$run/home")" = 775 ]
 touch "$run/home/keep"
 rm "$AGENT_LAYERS/example-etc.raw"
 AGENT_PI_PROVIDER=custom-provider write_agent_run "$run" /repo/example pi model 2 false
 grep -qxF 'AGENT_PI_PROVIDER="custom-provider"' "$run/run.env"
-unset AGENT_PI_PROVIDER
+unset AGENT_PI_PROVIDER AGENT_QUESTION_TIMEOUT_SECS
 write_agent_run "$run" /repo/example pi model 2 false
 grep -qxF 'AGENT_PI_PROVIDER="openai"' "$run/run.env"
 fails env AGENT_PI_PROVIDER="bad
@@ -105,6 +106,7 @@ provider" sh -c '. "$1/lib/agent-runs.sh"; . "$1/lib/agent-systemd.sh"; write_ag
 [ ! -L "$run/review/work" ]
 [ ! -L "$run/layers/project-etc.raw" ]
 if grep -q AGENT_SESSION_USD "$run/run.env"; then exit 1; fi
+if grep -q AGENT_QUESTION_TIMEOUT_SECS "$run/run.env"; then exit 1; fi
 
 # Legacy mount declarations are data only: never sourced, and warned once.
 mkdir -p "$run/work/.sandbox"
