@@ -91,3 +91,10 @@ single piece; the wider one is the steward of the meta-analysis repo. The philos
 
 Facilitator's conditions: anything that loosens or removes a check goes to Darrion, and proposals are scored on
 whether they were accepted and saved anything, so the role can shrink.
+
+## Decision 7: The wider improvement role goes to the philosopher
+
+Decided by Darrion on 2026-10-31; supersedes Decision 6's placing of the wider role with the meta-analysis steward.
+That steward is the orchestrator (meta-analysis `ORCHESTRATOR.md`), and an orchestrator should not judge the workflows
+it runs. The philosopher takes the wider question. A scoped run still looks at a single piece, and Decision 6's
+conditions stand.
