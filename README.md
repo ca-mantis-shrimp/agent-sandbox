@@ -115,8 +115,8 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | list landings awaiting a human verdict | `agent-verdict --pending` (workspace, repository, label, landed commit; tab-separated) |
 | list the human's review feedback, so someone reads it | `agent-verdict --feedback [<time>]` (time, workspace, repository, label, review or finding id, stance, note; tab-separated, oldest first) |
 | read a landing's review thread | `agent show <workspace>` or `agent verdict --pending \| fzf \| agent show -` |
-| record the human's or facilitator's judgment | `agent-verdict <workspace> --agree\|--disagree [--by human\|facilitator] [--overrule <text>]... [--missed <text>]... [--note <text>]` (no judgment flag: help, nothing recorded) |
-| comment on one finding of a landing's review | `agent-verdict <workspace> --on <finding-id> [--agree\|--disagree] [--note <text>]` (appends; the landing stays pending) |
+| record a human, facilitator or orchestrator judgment | `agent-verdict <workspace> --agree\|--disagree [--by human\|facilitator\|orchestrator] [--overrule <text>]... [--missed <text>]... [--note <text>]` (no judgment flag: help, nothing recorded) |
+| comment on one finding of a landing's review | `agent-verdict <workspace> --on <finding-id> [--agree\|--disagree] [--by human\|facilitator\|orchestrator] [--note <text>]` (appends; the landing stays pending) |
 | give an outside agent a mailbox, not a shell | `agent-mailbox <agent>` as its key's forced command (see Outside agents) |
 | fetch commits without merging | `agent-harvest <workspace>` |
 | gate and merge harvested work | `agent-land <workspace>` |
@@ -231,7 +231,7 @@ commit or merge conflict is preferable to a garbled action line.
 5. Check fixes. A fix does not reconcile a finding; the human records reconciliation after checking it. Reviews advise landing, not gate it.
 6. Run `agent-harvest <workspace>` when no session is running; it fetches branches in each repo and shows commits and closing messages without merging. Harvest again after further sessions.
 7. Run `agent-land <workspace>`. Before merging, it checks the harvested branch's test-commit file locks in every repository (see below). It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
-8. Record the human's or facilitator's landing judgment with `agent-verdict`; then push separately.
+8. Record the human's, facilitator's or orchestrator's landing judgment with `agent-verdict`; then push separately. Without `--by`, the command defaults to the human only when stdin is a terminal; nonterminal calls that record a judgment must name the judge explicitly, preventing unattended callers from accidentally recording a human verdict.
 
 At landing the host builds the conversation from its session records, in session order, and writes it as one note (`refs/notes/review`) on the landed root commit. Each review starts `# review <workspace>/<n>: <verdict> by <model>`. Each finding has a stable ID, `<review session>#<1-based index>`, and a quickfix line: `file:line: severity: <id> what — why` (or `(approach): ...` without a file). Early findings may refer to lines that later fixes moved.
 
@@ -245,7 +245,7 @@ The root landing message records the newest review's outcomes as trailers:
 
 A writer's parsed fix report can mark a finding fixed; Finding-Fixed credits its session, not a commit. An explicit `review_session` link identifies the answered review, including a review file stored in the same second. Legacy fixes without a link must be later sessions, or have a start timestamp at or after the external review's timestamp. IDs match exactly; legacy `what` strings match only exactly and unambiguously, never by prefix or fuzzy similarity. Declined, missing and unmatched findings stay open. This records a fixer's claim, not human approval. For example, `git log --format='%(trailers:key=Finding-Open)'` lists open findings across landings. Submodule merge messages retain the workspace trailer; the root records the overall outcomes. Merge messages also include the newest work session's first closing paragraph.
 
-Recorded verdicts go to `refs/notes/verdict` on the **landed root commit**. A later `agent-verdict` appends a new judgment, preserving earlier judgments; before landing it only updates the workspace manifest. Notes are conversation records, not mutable finding state.
+Recorded human, facilitator and orchestrator verdicts go to `refs/notes/verdict` on the **landed root commit** and are stored independently in the workspace manifest. A later `agent-verdict` appends a new judgment, preserving earlier judgments; before landing it only updates the workspace manifest. Notes are conversation records, not mutable finding state. The human-only `--pending` and `--feedback` views ignore facilitator and orchestrator verdicts: an orchestrator judgment does not satisfy the human's pending review.
 
 `agent show <workspace>` prints saved reviews and fix reports in session order, then landing trailers and append-only verdict notes. Finding paths resolve to the local checkout, so `nvim -q <(agent show <workspace>)` works from anywhere. Both `agent show -` and `agent verdict - --agree` read the first tab-separated field of the first stdin line, for pipelines from `agent verdict --pending` through a selector.
 

@@ -157,7 +157,7 @@ verdict_note_text() { # stdin: workspace JSON; one ordered block per recorded ju
                  + [$v.missed[]? | "missed: \(. | one_line)"]
                  + (if ($v.note // "") == "" then [] else ["note: \($v.note | one_line)"] end))
               end;
-        judge_lines("human") + judge_lines("facilitator") | join("\n")'
+        judge_lines("human") + judge_lines("facilitator") + judge_lines("orchestrator") | join("\n")'
 }
 
 finding_note_text() { # <judge>; stdin: one finding feedback entry
