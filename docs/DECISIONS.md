@@ -68,3 +68,26 @@ leaves the landing waiting for its verdict.
 Why: a bundle holds findings Darrion agrees with and findings they don't, and a blanket call can't say which.
 Darrion: "i could just agree but i might agree or disagree with the bundle with extra comments so you know why
 then if im being really good i might leave comments on the individual pieces".
+
+## Decision 5: Tests and code come from separate sessions, each limited to its own files
+
+Decided by Darrion on 2026-10-31. Where possible, one session writes tests and another writes code, and each may
+edit only its own paths; a third group of files (the gate, lint config, role definitions) belongs to neither.
+
+Why: perspective, as much as test quality. An implementer can say "these tests are a bad fit" and a tester can say
+"this is untestable"; limiting their files makes asking the easy path instead of changing things directly or
+commenting out offending code ("more to encourage them to ask question and make requests"). `agent-ask` is how they
+ask.
+
+How, by the facilitator: a project declares its paths; the host reads them from outside the writable workspace and
+checks each session's commits at landing, because projects such as srr keep tests beside source, so read-only mounts
+cannot express this. Implementation is =session-roles, trialled on one real change first.
+
+## Decision 6: A continuous improvement role, at two scopes
+
+Decided by Darrion on 2026-10-31. A role asks of CI, tests, tools and source "is there a better way? are things
+misconfigured or misoptimized?", and owns the third group of files in Decision 5. A strictly scoped run looks at a
+single piece; the wider one is the steward of the meta-analysis repo. The philosopher keeps watching the facilitator.
+
+Facilitator's conditions: anything that loosens or removes a check goes to Darrion, and proposals are scored on
+whether they were accepted and saved anything, so the role can shrink.
