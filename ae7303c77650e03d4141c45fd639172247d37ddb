@@ -1,2 +1,5 @@
 # verdict: facilitator agrees with the review (2026-10-31T07:33:35+00:00)
 note: Orchestrator's judgment, run vb1. Branch matches the brief. The review could not see Darrion's nvim verdict keys, which would have been refused; fixed first in dotfiles with --by human.
+
+# finding 4#1: human agrees (2026-10-31T07:56:27+00:00)
+note: true but here we hadnt implemented the system yet so we dont need to change it quite so fast more for future work
