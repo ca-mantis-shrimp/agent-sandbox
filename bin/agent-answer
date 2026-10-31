@@ -16,13 +16,19 @@ run="$(runs_dir)/$ws"
 question_dir_safe "$run" || { say "unsafe or missing questions directory for $ws"; exit 1; }
 question="$run/questions/$q.md"
 session_file="$run/questions/$q.session"
-question_file_safe "$question" 65536 || { say "refusing unsafe question: $question"; exit 1; }
-question_file_safe "$session_file" 32 || { say "refusing unsafe question session record: $session_file"; exit 1; }
-session=$(cat "$session_file") || { say 'cannot read question session'; exit 1; }
+[ ! -e "$run/questions/$q.timeout" ] && [ ! -L "$run/questions/$q.timeout" ] || {
+    say "question $ws/$q timed out"; exit 1;
+}
+question_contents=$(question_file_read "$question" 65536) || { say "refusing unsafe question: $question"; exit 1; }
+session_contents=$(question_file_read "$session_file" 32) || {
+    say "refusing unsafe question session record: $session_file"; exit 1;
+}
+session=$session_contents
 question_id_valid "$session" || { say 'invalid question session'; exit 1; }
 record="$run/sessions/$session.json"
-[ ! -L "$record" ] && [ -f "$record" ] || { say "unsafe session record: $record"; exit 1; }
-jq -e --argjson n "$session" 'select(.state == "running" and .n == $n)' "$record" >/dev/null 2>&1 || {
+record_contents=$(question_file_read "$record" 65536) || { say "unsafe session record: $record"; exit 1; }
+printf '%s\n' "$record_contents" | jq -e --argjson n "$session" \
+    'select(.state == "running" and .n == $n)' >/dev/null 2>&1 || {
     say "question $ws/$q is not from a running session"; exit 1;
 }
 agent_unit_active "$ws" || { say "session for $ws is not running"; exit 1; }
@@ -39,8 +45,8 @@ else
     bytes=$(printf '%s' "$input" | wc -c)
     [ "$bytes" -le 65536 ] || { say 'answer exceeds 65536 bytes'; exit 1; }
 fi
-# noclobber makes creation exclusive: an existing file or symlink is never
-# replaced, even if it appeared after the checks above.
+# Noclobber prevents replacing an existing regular file, but is not O_EXCL for
+# every target type; a target swapped after the checks can still be special.
 if [ -f "$input" ]; then
     (umask 002; set -C; cat "$input" >"$answer") || { say "could not create answer: $answer"; exit 1; }
 else

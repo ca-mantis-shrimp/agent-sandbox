@@ -5,10 +5,21 @@ question_id_valid() { # <question id>
     [ "${#1}" -le 15 ]
 }
 
-question_file_safe() { # <path> <max bytes>
-    [ ! -L "$1" ] && [ -f "$1" ] || return 1
-    bytes=$(wc -c <"$1") || return 1
-    [ "$bytes" -le "$2" ]
+question_file_read() { # <path> <max bytes>; bounded content on stdout
+    (
+        path=$1 max=$2
+        [ ! -L "$path" ] && [ -f "$path" ] || exit 1
+        tmp=$(mktemp) || exit 1
+        trap 'rm -f "$tmp"' 0
+        trap 'exit 1' HUP INT TERM
+        # Open once, refuse links at open time, and avoid blocking on a swapped FIFO.
+        # Read one byte past the limit so oversized files are rejected, not truncated.
+        dd if="$path" of="$tmp" iflag=nofollow,nonblock,count_bytes \
+            count=$((max + 1)) status=none 2>/dev/null || exit 1
+        bytes=$(wc -c <"$tmp") || exit 1
+        [ "$bytes" -le "$max" ] || exit 1
+        cat "$tmp"
+    )
 }
 
 question_dir_safe() { # <workspace-dir>
@@ -28,20 +39,29 @@ waiting_questions() { # <workspace-dir> <workspace-id>
         [ -e "$qfile" ] || [ -L "$qfile" ] || continue
         qname=${qfile##*/}
         q=${qname%.md}
-        if ! question_id_valid "$q" || ! question_file_safe "$qfile" 65536; then
+        if ! question_id_valid "$q"; then
             echo "agent-status > refusing unsafe question: $qfile" >&2
             continue
         fi
+        [ ! -e "$qrun/questions/$q.timeout" ] && [ ! -L "$qrun/questions/$q.timeout" ] || continue
+        question_contents=$(question_file_read "$qfile" 65536) || {
+            echo "agent-status > refusing unsafe question: $qfile" >&2
+            continue
+        }
         session_file="$qrun/questions/$q.session"
-        if ! question_file_safe "$session_file" 32; then
+        session_contents=$(question_file_read "$session_file" 32) || {
             echo "agent-status > refusing unsafe question session record: $session_file" >&2
             continue
-        fi
-        session=$(cat "$session_file") || continue
+        }
+        session=$session_contents
         question_id_valid "$session" || continue
         record="$qrun/sessions/$session.json"
-        [ ! -L "$record" ] && [ -f "$record" ] || continue
-        jq -e --argjson n "$session" 'select(.state == "running" and .n == $n)' "$record" >/dev/null 2>&1 || continue
+        record_contents=$(question_file_read "$record" 65536) || {
+            echo "agent-status > refusing unsafe session record: $record" >&2
+            continue
+        }
+        printf '%s\n' "$record_contents" | jq -e --argjson n "$session" \
+            'select(.state == "running" and .n == $n)' >/dev/null 2>&1 || continue
         agent_unit_active "$qid" || continue
         answer="$qrun/questions/$q.answer"
         if [ -e "$answer" ] || [ -L "$answer" ]; then
@@ -50,7 +70,7 @@ waiting_questions() { # <workspace-dir> <workspace-id>
             fi
             continue
         fi
-        title=$(head -n 1 "$qfile" | tr -cd '\11\12\15\40-\176' | tr '\t\r' '  ' | cut -c1-200)
+        title=$(printf '%s\n' "$question_contents" | head -n 1 | tr -cd '\11\12\15\40-\176' | tr '\t\r' '  ' | cut -c1-200)
         printf '%s\t%s\n' "$q" "$title"
     done
 }

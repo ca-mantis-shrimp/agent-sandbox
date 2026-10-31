@@ -143,9 +143,11 @@ block in `agent-status --wait-question` and answer with
 `agent-answer <workspace>/<id> "text"` or a file. Answers are never overwritten.
 
 The default wait is 900 seconds; set `AGENT_QUESTION_TIMEOUT_SECS` in the
-launcher environment to a positive value below 21600 seconds. A timeout exits
-non-zero and tells the session to take the normal `NEEDS DECISION` stop. This
-keeps the wait below the unit's six-hour maximum. Question and answer files are
+launcher environment to a positive value no greater than 3600 seconds. A timeout
+exits non-zero, marks the question with `<id>.timeout`, and tells the session to
+take the normal `NEEDS DECISION` stop. Timed-out questions are excluded from the
+host's waiting list and cannot be answered. This leaves time before the unit's
+six-hour maximum. Question and answer files are
 capped at 65536 bytes. Questions are data only, not commands or terminal input;
 the host refuses symlinks, non-regular files and oversized questions rather
 than reading them. The session holds its unit, workspace lock and deadline while

@@ -10,8 +10,8 @@ case "$session" in ''|0*|*[!0-9]*) say 'invalid session number'; exit 2 ;; esac
 question=$1
 timeout=${AGENT_QUESTION_TIMEOUT_SECS:-900}
 case "$timeout" in ''|0*|*[!0-9]*) say 'AGENT_QUESTION_TIMEOUT_SECS must be a positive integer'; exit 2 ;; esac
-[ "${#timeout}" -le 5 ] && [ "$timeout" -lt 21600 ] || {
-    say 'AGENT_QUESTION_TIMEOUT_SECS must be below 21600'; exit 2;
+[ "${#timeout}" -le 4 ] && [ "$timeout" -le 3600 ] || {
+    say 'AGENT_QUESTION_TIMEOUT_SECS must not exceed 3600'; exit 2;
 }
 questions="$job/questions"
 if [ -L "$questions" ] || { [ -e "$questions" ] && [ ! -d "$questions" ]; }; then
@@ -21,7 +21,8 @@ mkdir -p "$questions"
 q=1
 while [ -e "$questions/$q.md" ] || [ -L "$questions/$q.md" ] ||
       [ -e "$questions/$q.answer" ] || [ -L "$questions/$q.answer" ] ||
-      [ -e "$questions/$q.session" ] || [ -L "$questions/$q.session" ]; do
+      [ -e "$questions/$q.session" ] || [ -L "$questions/$q.session" ] ||
+      [ -e "$questions/$q.timeout" ] || [ -L "$questions/$q.timeout" ]; do
     [ "$q" -lt 999999999999999 ] || { say 'question id space exhausted'; exit 1; }
     q=$((q + 1))
 done
@@ -49,6 +50,9 @@ while :; do
     fi
     now=$(date +%s)
     if [ "$((now - started))" -ge "$timeout" ]; then
+        (umask 002; set -C; : >"$questions/$q.timeout") || {
+            say 'could not mark timed-out question'; exit 1;
+        }
         say 'timed out; take the NEEDS DECISION stop'
         exit 1
     fi
