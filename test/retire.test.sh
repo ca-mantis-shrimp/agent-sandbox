@@ -112,7 +112,10 @@ make_workspace empty
 [ -f "$AGENT_RUNS/empty/prompts/1.md" ]
 [ -f "$AGENT_RUNS/empty/transcripts/1.jsonl" ]
 jq -e '.retired and .state == "retired"' "$AGENT_RUNS/empty/manifest.json" >/dev/null
-! "$tool/bin/agent-status" | grep -q '^empty '
+status_output=$("$tool/bin/agent-status")
+if printf '%s\n' "$status_output" | grep -q '^empty '; then
+    echo 'retired workspace still appears in agent-status' >&2; exit 1
+fi
 
 # A running record is a refusal even if the manager has stopped: reconcile first.
 make_workspace recorded-running

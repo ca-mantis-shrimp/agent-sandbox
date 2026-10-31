@@ -39,7 +39,9 @@ PATH="$tmp/path" "$tool/bin/agent-doctor" >"$tmp/out"
 grep -q 'calling process is in agents group' "$tmp/out"
 grep -q 'ok       agent@.service installed' "$tmp/out"
 grep -Fq 'note     Claude sessions need /etc/credstore/agent.claude_token (plain) or /etc/credstore.encrypted/agent.claude_token (sealed with systemd-creds encrypt, e.g. to the TPM); neither root-only credstore can be checked from this user' "$tmp/out"
-! grep -q 'agent.claude_token.*missing' "$tmp/out"
+if grep -q 'agent.claude_token.*missing' "$tmp/out"; then
+    echo 'doctor reported a missing Claude token despite the note-only check' >&2; exit 1
+fi
 grep -q 'ok       shared pi login for provider openai' "$tmp/out"
 grep -Fxq 'agent-doctor > note     TCP listeners reachable through loopback: 127.0.0.1:8799 127.0.0.53:53 127.3.2.1:8080 0.0.0.0:80 [::1]:443 [::]:8080' "$tmp/out"
 # No listeners, including header-only files, is a note rather than a failure.

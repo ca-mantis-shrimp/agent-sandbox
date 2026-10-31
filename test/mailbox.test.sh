@@ -54,5 +54,7 @@ AGENT_MAILBOX_MAX_FILE=8 SSH_ORIGINAL_COMMAND='put t2' sh "$tool/bin/agent-mailb
 # Every call is logged on one line, control characters made visible.
 box "$(printf 'bogus\nforged line')" 2>/dev/null || :
 [ "$(grep -c 'forged line' "$inbox/calls.log")" -eq 1 ]
-! grep -qx 'forged line' "$inbox/calls.log" || { echo 'log line forged' >&2; exit 1; }
+if grep -qx 'forged line' "$inbox/calls.log"; then
+    echo 'log line forged' >&2; exit 1
+fi
 echo 'agent-mailbox.test > ok'

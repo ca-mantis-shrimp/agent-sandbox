@@ -117,7 +117,9 @@ if "$tool/bin/agent-harvest" safe >"$tmp/bundle.log" 2>&1; then exit 1; fi
 grep -q 'error:' "$tmp/bundle.log"
 cp "$run/exports/1/sm-sub.bundle" "$run/exports/2/sm-sub.bundle"
 "$tool/bin/agent-harvest" safe >"$tmp/harvest.log" 2>&1
-! grep -q 'is okay' "$tmp/harvest.log"
+if grep -q 'is okay' "$tmp/harvest.log"; then
+    echo 'invalid bundle reported as okay' >&2; exit 1
+fi
 [ "$(grep -c -- '-c transfer.fsckObjects=true fetch' "$GIT_LOG")" -ge 2 ]
 
 # A repaired workspace history replaces the host harvest branch and reports
