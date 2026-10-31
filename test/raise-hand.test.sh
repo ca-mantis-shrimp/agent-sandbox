@@ -49,7 +49,7 @@ exec /bin/cat "$@"
 EOF
 cat >"$tmp/bin/wc" <<'EOF'
 #!/bin/sh
-if [ -n "${SWAP_ANSWER_INPUT:-}" ] && [ "$1" = -c ] && [ -n "$2" ]; then
+if [ -n "${SWAP_ANSWER_INPUT:-}" ] && [ "$1" = -c ]; then
     mv "$AGENT_JOB/questions" "$SWAP_QUESTION_DIR"
     ln -s "$SWAP_QUESTION_TARGET" "$AGENT_JOB/questions"
     unset SWAP_ANSWER_INPUT
