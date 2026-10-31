@@ -16,11 +16,14 @@ run="$(runs_dir)/$ws"
 question_dir_safe "$run" || { say "unsafe or missing questions directory for $ws"; exit 1; }
 run_real=$(CDPATH= cd -- "$run" && pwd -P) || { say "no workspace: $ws"; exit 1; }
 expected_questions=$run_real/questions
-# Resolve a relative answer-file argument before entering the pinned directory.
+# Decide whether this is a file answer in the caller's directory, and pin its
+# path before entering the untrusted questions directory.
 case "$input" in
     /*) ;;
     *) if [ -e "$input" ] || [ -L "$input" ]; then input=$(pwd -P)/$input; fi ;;
 esac
+input_is_file=0
+[ ! -L "$input" ] && [ -f "$input" ] && input_is_file=1
 (
     cd -P "$run/questions" || { say "unsafe or missing questions directory for $ws"; exit 1; }
     [ "$(pwd -P)" = "$expected_questions" ] || {
@@ -43,7 +46,7 @@ esac
         cd -P "$expected_sessions" || exit 1
         [ "$(pwd -P)" = "$expected_sessions" ] || exit 1
         question_file_read "$session.json" 65536
-    ) || { say "unsafe session record: $run/sessions/$session.json"; exit 1; }
+    ) || { say "unsafe session record: $expected_sessions/$session.json"; exit 1; }
     printf '%s\n' "$record_contents" | jq -e --argjson n "$session" \
         'select(.state == "running" and .n == $n)' >/dev/null 2>&1 || {
         say "question $ws/$q is not from a running session"; exit 1;
@@ -55,7 +58,7 @@ esac
         exit 1
     fi
     if [ -L "$input" ]; then say "refusing symlink input: $input"; exit 1; fi
-    if [ -f "$input" ]; then
+    if [ "$input_is_file" -eq 1 ]; then
         bytes=$(wc -c <"$input")
         [ "$bytes" -le 65536 ] || { say 'answer exceeds 65536 bytes'; exit 1; }
     else
@@ -64,7 +67,7 @@ esac
     fi
     # Noclobber prevents replacing an existing regular file, but is not O_EXCL for
     # every target type; a target swapped after the checks can still be special.
-    if [ -f "$input" ]; then
+    if [ "$input_is_file" -eq 1 ]; then
         (umask 002; set -C; cat "$input" >"$answer") || { say "could not create answer: $run/questions/$answer"; exit 1; }
     else
         (umask 002; set -C; printf '%s\n' "$input" >"$answer") || { say "could not create answer: $run/questions/$answer"; exit 1; }
