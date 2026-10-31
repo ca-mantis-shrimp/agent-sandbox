@@ -1,0 +1,5 @@
+# review 20261031-025244/2: land by claude-opus-5-5
+# fix 20261031-025244/3 by gpt-6-luna, answering review 2
+# review 20261031-025244/4: land by claude-opus-5-5
+test/land.test.sh:634: nit: 4#1 The no-empty-note check on retry looks only at no_review_tip, while a retry writes to manifest .landed_commit — If the two commits ever differ, a stray note would go unnoticed; checking that refs/notes/review is absent (as a few lines earlier) is more robust
+.clearhead/charters/next.actions:31: nit: 4#2 The =negated-asserts DONE note does not record that a converted assertion was proven by breaking the code it guards, as the action asked — Without that proof there is no record that the new assertions can actually fail
