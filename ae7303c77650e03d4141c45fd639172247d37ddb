@@ -5,3 +5,6 @@ note: Orchestrator's judgment, run vb1. Branch matches the brief. The review cou
 note: true but here we hadnt implemented the system yet so we dont need to change it quite so fast more for future work
 
 # finding 4#2: human agrees (2026-10-31T07:56:43+00:00)
+
+# verdict: human agrees with the review (2026-10-31T07:58:50+00:00)
+note: agreed but these are all relatively small in the grand scheme of things just need to make sure yes tests fail properly as noted
