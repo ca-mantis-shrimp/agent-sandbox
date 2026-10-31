@@ -7,11 +7,19 @@ trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/tool/bin" "$tmp/tool/lib" "$tmp/runs/ws/sessions"
 cp "$tool/bin/agent-fix" "$tmp/tool/bin/"
 cp "$tool/lib/agent-runs.sh" "$tool/lib/agent-review.jq" "$tmp/tool/lib/"
-export AGENT_RUNS="$tmp/runs" CAPTURE="$tmp/capture"
+export AGENT_RUNS="$tmp/runs" CAPTURE="$tmp/capture" CAPTURE_REVIEW="$tmp/review-session"
 cat >"$tmp/tool/bin/agent-run" <<'SH'
 #!/bin/sh
 set -eu
 jq -n --args '$ARGS.positional' -- "$@" >"$CAPTURE"
+review_session=${AGENT_REVIEW_SESSION:-}
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --review-session) review_session=${2:?}; shift 2 ;;
+        *) shift ;;
+    esac
+done
+printf '%s' "$review_session" >"$CAPTURE_REVIEW"
 printf 'ws/12\n'
 exit "${LAUNCH_STATUS:-0}"
 SH
@@ -30,6 +38,7 @@ record 12 true null
 record 13 false "$report"
 # Numeric latest parsed reader, not the newest record or lexicographic last.
 [ "$(sh "$fix" ws --harness pi --model 'model id' --wait)" = ws/12 ]
+[ "$(cat "$CAPTURE_REVIEW")" = 10 ]
 jq -e '.[0:2] == ["--in","ws"] and .[2] == "--prompt"
     and .[4:] == ["--harness","pi","--model","model id","--wait"]' "$CAPTURE" >/dev/null
 prompt=$(jq -r '.[3]' "$CAPTURE")
@@ -43,6 +52,7 @@ findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n
 printf 'Policy: keep behavior.\nAnswer: use existing helper.\n' >"$tmp/note.txt"
 (cd "$tmp"; sh "$fix" ws/2 --nits --note note.txt --harness claude >/dev/null)
 prompt=$(jq -r '.[3]' "$CAPTURE")
+[ "$(cat "$CAPTURE_REVIEW")" = 2 ]
 printf '%s\n' "$prompt" | grep -qF 'Target: review session ws/2.'
 printf '%s\n' "$prompt" | grep -qF 'Answer: use existing helper.'
 findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n```").body | fromjson')
@@ -95,6 +105,10 @@ unset LAUNCH_STATUS
 printf '%s\n' "$report" >"$tmp/review.json"
 (cd "$tmp"; sh "$fix" ws --review review.json --reviewer claude-opus-5-5 --nits --note note.txt >/dev/null)
 prompt=$(jq -r '.[3]' "$CAPTURE")
+# The stub launcher records the attribution passed through the fix -> run boundary.
+# External review ids are generated for this invocation and live in reviews/.
+external_review_id=$(find "$AGENT_RUNS/ws/reviews" -name '*.json' -type f | while IFS= read -r f; do jq -r '.id' "$f"; done | tail -n 1)
+[ "$(cat "$CAPTURE_REVIEW")" = "$external_review_id" ]
 printf '%s\n' "$prompt" | grep -qF 'in workspace ws (reviewer: claude-opus-5-5).'
 . "$tool/lib/agent-runs.sh"
 workspace_json "$AGENT_RUNS/ws" | jq -e --argjson report "$report" '
