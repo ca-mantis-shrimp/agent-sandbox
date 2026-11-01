@@ -98,3 +98,22 @@ Decided by Darrion on 2026-10-31; supersedes Decision 6's placing of the wider r
 That steward is the orchestrator (meta-analysis `ORCHESTRATOR.md`), and an orchestrator should not judge the workflows
 it runs. The philosopher takes the wider question. A scoped run still looks at a single piece, and Decision 6's
 conditions stand.
+
+## Decision 8: Show what still needs the human, not the whole history
+
+Decided by Darrion on 2026-11-01. `agent show <workspace>` prints only the newest non-human bundle verdict
+block in `refs/notes/verdict` on the landed commit: the facilitator's or orchestrator's landing note, including
+its header and recorded outcomes. Newest means last in the append-only conversation, across both non-human
+judges, not the manifest's latest value for one judge. Human verdicts and per-finding comments do not supersede
+that summary. Without a non-human landing verdict, show only the `Finding-Open` trailers; without those, print
+nothing. Thus a landing without a steward note cannot hide its open findings.
+
+`agent show --all <workspace>` preserves the previous full-thread output byte-for-byte, including quickfix
+paths resolved to the local checkout. Both views accept `-` for a workspace selected from `--pending` on stdin.
+The default is also the short view in editor picker previews and quickfix; no editor flag change is needed.
+This changes only presentation, not verdict recording, append-only notes, or the human-only pending list.
+
+Why: Darrion asked for "only active stuff you need from me not the ones that were already fixed or that can
+just be thrown to a fix agent". The full thread on 20261031-223325 showed eight findings with none needing
+them. The steward already records the landing summary; showing that avoids inventing a second finding-state
+model while retaining the entire conversation behind `--all`.

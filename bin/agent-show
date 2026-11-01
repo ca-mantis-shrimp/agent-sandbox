@@ -1,15 +1,45 @@
 #!/bin/sh
-# Print a landing's review thread as quickfix-ready text from any directory.
-# Usage: agent-show <workspace|->
+# Print the newest steward verdict, or open landing trailers if none exists.
+# Usage: agent-show [--all] <workspace|->
 # '-' reads the first tab-separated field of the first stdin line.
 set -eu
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
 . "$tool/lib/agent-runs.sh"
-id=$(workspace_id_input "${1:?usage: agent-show <workspace|->}") || exit 2
+all=false
+# Accept --all before or after the workspace, including stdin selection.
+workspace=''
+for arg do
+    case "$arg" in
+        --all) all=true ;;
+        *) [ -z "$workspace" ] || { echo 'usage: agent-show [--all] <workspace|->' >&2; exit 2; }
+           workspace=$arg ;;
+    esac
+done
+id=$(workspace_id_input "${workspace:?usage: agent-show [--all] <workspace|->}") || exit 2
 case "$id" in ''|.|..|*[!a-zA-Z0-9_-]*) echo 'agent-show > invalid workspace' >&2; exit 2 ;; esac
 run=$(runs_dir)/$id
 repo=$(workspace_repo "$run")
 commit=$(jq -er '.landed_commit | select(type == "string" and length > 0)' "$run/manifest.json")
+if [ "$all" = false ]; then
+    # Git notes are append-only conversation records. Bundle verdicts and finding
+    # comments have separate headers; only a non-human bundle is a landing note.
+    # Read the note, not the manifest (which keeps only one verdict per judge).
+    steward=$({ git -C "$repo" notes --ref=verdict show "$commit" 2>/dev/null || :; } |
+        jq -Rrs '
+            split("\n") | reduce .[] as $line ([];
+                if ($line | test("^# (verdict:|finding )")) then . + [[$line]]
+                elif length > 0 then .[-1] += [$line] else . end)
+            | map(select(.[0] | test("^# verdict: (facilitator|orchestrator) ")))
+            | (last // []) | join("\n") | sub("\n+$"; "")')
+    if [ -n "$steward" ]; then
+        printf '%s\n' "$steward"
+    else
+        git -C "$repo" show -s --format='%(trailers:key=Finding-Open,only)' "$commit" |
+            jq -Rr 'select(startswith("Finding-Open:"))'
+    fi
+    exit 0
+fi
+# Full historical view: keep formatting and quickfix path resolution unchanged.
 { git -C "$repo" notes --ref=review show "$commit" 2>/dev/null || :; } |
     jq -Rr --arg repo "$repo" --arg id "$id" '
         if (test("^(#|fixed:|declined:)") | not) and test("^.+:[0-9]+: ") then
