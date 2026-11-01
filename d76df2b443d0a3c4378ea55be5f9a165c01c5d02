@@ -1,0 +1,2 @@
+# verdict: orchestrator agrees with the review (2026-11-01T19:04:10+00:00)
+note: agent show now prints only the steward's landing note, or the open findings if there is no note; the full thread moved to agent show --all. So <leader>vv shows you the note, and from its quickfix you can no longer jump to findings or rate them unless they are the open ones. Two follow-ups are filed, nothing needs you: the steward wake prompt should read --all, and an nvim key for --all if you want one.
