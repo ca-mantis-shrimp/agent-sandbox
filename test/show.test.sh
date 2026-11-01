@@ -12,7 +12,7 @@ git init -q "$tmp/repo"
 git -C "$tmp/repo" commit -q --allow-empty -m 'feat: work' -m 'Finding-Open: 1#1 Bug (blocking)'
 commit=$(git -C "$tmp/repo" rev-parse HEAD)
 jq -n --arg repo "$tmp/repo" --arg commit "$commit" '{repo:$repo,landed:"now",landed_commit:$commit}' >"$AGENT_RUNS/ws/manifest.json"
-printf '{"label":"example"}\n' >"$AGENT_RUNS/ws/sessions/1.json"
+printf '{"label":"example","review":{"findings":[{"what":"Bug","severity":"blocking"}]}}\n' >"$AGENT_RUNS/ws/sessions/1.json"
 printf '# review ws/1: land by reviewer\na:2: blocking: 1#1 Bug — Why\n/srv/job/ws/work/sub/b:3: nit: 1#2 Style — Why\n' | git -C "$tmp/repo" notes --ref=review add -F - "$commit"
 printf '%s\n' '# fix ws/2 by fixer, answering review 1' 'fixed: legacy a.sh:3: repaired' 'declined: 1#2 — see a.sh:3: intentional' '# heading a.sh:3: context' | git -C "$tmp/repo" notes --ref=review append -F - "$commit"
 # Show reads Git notes, not a stale saved file.
