@@ -16,3 +16,8 @@ Ground rules:
 - POSIX `sh`, `jq` and Git, no other runtime. `lib/` holds what more than one command needs.
 - Run `sh test/<name>.test.sh` for what you touch; `land.test.sh` stubs systemctl; image mounts and isolation need host verification. A change to `agents/` (the session runner, the image layer) needs a real session to prove it.
 - Put test-first changes in a separate commit whose subject starts `test:` or `test(<scope>):`; legacy `Tests:` subjects remain supported by the landing lock.
+
+Who works here: the orchestrator, or this project's own steward once it has one (Darrion, 2026-11-05). Landings
+don't wait on Darrion's verdict; they can read any they choose (Darrion, 2026-10-31: "agent sandbox is more your project so
+you can iterate more quickly", said to the facilitator before the orchestrator and stewards took the work). They keep
+asking whether it is too big for a bunch of bash.
