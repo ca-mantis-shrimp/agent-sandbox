@@ -265,12 +265,12 @@ merge_candidate() {
             [ "$pin" != "$base_pin" ] || continue
             real=$(git -C "$cand/$sm" rev-parse refs/agent/land-base)
             git -C "$repo/$sm" cat-file -e "$pin^{commit}" 2>/dev/null ||
-                stop "$sm: cannot move real tip $real to pin $pin: commit absent from real submodule repo"
+                stop "$sm: cannot move real tip $real to pin $pin: commit absent from real submodule repo. Fix the branch and harvest it again; remove $cand and rerun"
             git -C "$repo/$sm" merge-base --is-ancestor "$real" "$pin" ||
-                stop "$sm: cannot move real tip $real to pin $pin: not a fast-forward"
+                stop "$sm: cannot move real tip $real to pin $pin: not a fast-forward. Fix the branch and harvest it again; remove $cand and rerun"
             git -C "$cand/$sm" fetch -q --no-recurse-submodules "$repo/$sm" "$pin"
             git -C "$cand/$sm" merge --ff-only -q "$pin" ||
-                stop "$sm: cannot fast-forward candidate from real tip $real to pin $pin"
+                stop "$sm: cannot fast-forward candidate from real tip $real to pin $pin. Fix the branch and harvest it again; remove $cand and rerun"
         done
         # Re-pin bottom-up, committing each nearest parent before its parent
         # stages it. A submodule with its own branch still uses its merged HEAD.
