@@ -1,0 +1,26 @@
+# review 20261105-082943/2: land after fixes by claude-opus-5-5
+bin/agent-land:258: blocking: 2#1 A pin move is detected by comparing the agent branch's gitlink ($branch:$path) with the land-base gitlink, not with the gitlink at the branch's merge-base. A branch that never touched the submodule but was created before main advanced the submodule pin looks like a move back to the older commit, and landing stops with 'not a fast-forward'. — Regression: stale root branches that land fine on main (git add re-pins the real tip) are now refused. This is the normal case whenever another workspace has landed submodule work in the meantime, and it hits every steward. Reproduced with a scratch probe. Fix: treat a gitlink as moved only if it differs from the gitlink at git merge-base HEAD $branch in the parent (or read the merged index), and add a test-first case for it.
+bin/agent-land:262: nit: 2#2 The pin-refusal stop messages do not tell the human to remove the candidate, which is left mid-merge with MERGE_HEAD set. — After a corrected re-harvest, the rerun keeps the old in-progress merge and only fails later with 'new work harvested since gating'. Saying 'remove $cand and rerun' up front would save a round trip.
+# fix 20261105-082943/3 by gpt-6.1-sol, answering review 2
+fixed: 2#1
+# review 20261105-082943/4: land after fixes by claude-opus-5-5
+bin/agent-land:268: should-fix: 4#1 The new pin-move stops leave the candidate with an uncommitted root merge, and later runs reuse it; the stop message gives no recovery step — After fixing the branch, a rerun stops with the misleading 'new work harvested since gating' message although no gate ran; the user must work out on their own that the candidate has to be removed. The stop should say to fix the branch, remove the candidate and rerun, or clean the candidate up.
+bin/agent-land:277: nit: 4#2 The bottom-up repin now adds a 'Pin submodules' commit in a nested parent when a nested submodule has its own agent branch; no test covers this path — The action asks that submodule-branch merges stay unchanged, but only the top-level owned-branch case is tested.
+bin/agent-land:268: nit: 4#3 The new stop messages print bare $sm instead of $(name "$sm") like the surrounding stops — Inconsistent with the other messages; harmless for submodule paths.
+# fix 20261105-082943/5 by gpt-6.1-sol, answering review 4
+fixed: 4#1
+# review 20261105-082943/6: land after fixes by claude-opus-5-5
+bin/agent-land:285: should-fix: 6#1 The new bottom-up re-pin loop creates a 'Pin submodules: land <branch>' commit in an intermediate parent submodule (e.g. when a nested leaf has its own agent branch and its parent has none), but no test covers that path. — That case used to stop (root-level git add of a nested path fails). It now creates and fast-forwards new commits onto a real parent branch, untested.
+bin/agent-land:161: nit: 6#2 The message now says 'differs from parent pin' but still advises 'commit the submodule pointer in the root first'. — For a nested submodule the pointer has to be committed in the nearest parent, not the root, so the advice misleads.
+bin/agent-land:268: nit: 6#3 The new stop messages use bare $sm while the rest of the file uses $(name "$sm"). — Consistency only; output is the same for submodule paths today.
+# fix 20261105-082943/7 by gpt-6.1-sol, answering review 6
+fixed: 6#1
+# review 20261105-082943/8: land after fixes by claude-opus-5-5
+bin/agent-land:263: blocking: 8#1 The pin-adoption loop runs rev-parse "$source:$path" (and "$base:$path") for every submodule in the real checkout without handling a path missing from the agent branch or its merge-base, so when main added a submodule after the branch forked, rev-parse fails and set -e aborts landing with only 'fatal: path ... exists on disk, but not in agent/<id>'. — Regression: main lands the same workspace cleanly. Stale branches after main advances are a normal landing case; the workspace cannot land without rewriting its branch, and the error gives no recovery guidance.
+test/land.test.sh:314: nit: 8#2 Assertion loosened to 'commit the submodule pointer in the', so the new 'nearest parent first' wording from dc30069 is no longer checked. — The diagnostic could regress without any test failing.
+test/land.test.sh:232: nit: 8#3 The nested-leaf re-pin test in commit d404547 is subjected test(land): but already passes against the earlier fix c07fbe7; it is coverage, not a red-first test. — The test: commit convention implies a red-first change; this one adds coverage only.
+# fix 20261105-082943/9 by gpt-6.1-sol, answering review 8
+fixed: 8#1
+# review 20261105-082943/10: land by claude-opus-5-5
+bin/agent-land:270: nit: 10#1 A reviewed pin that is an ancestor of the real tip (main already moved further) stops as 'not a fast-forward' and tells the human to fix the branch — Stale branches that moved a pin main has since passed will block landing, and the recovery advice points at the branch even though it is only behind main; follows the spec, but worth a human decision
+bin/agent-land:248: nit: 10#2 The parent/path/gitlink lookup is repeated in build_candidate, the adoption loop and the re-pin loop — A small helper returning the parent-relative path would shorten merge_candidate and make the three rules easier to keep consistent
