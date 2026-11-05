@@ -158,7 +158,7 @@ build_candidate() {
         [ "$parent" = . ] || path=${sm#"$parent"/}
         pinned=$(git -C "$repo/$parent" rev-parse "HEAD:$path")
         [ "$real" = "$pinned" ] ||
-            stop "$(name "$sm"): real branch tip $real differs from parent pin $pinned; commit the submodule pointer in the root first"
+            stop "$(name "$sm"): real branch tip $real differs from parent pin $pinned; commit the submodule pointer in the nearest parent first"
     done
     # A failed or interrupted build is disposable, unlike a completed candidate
     # retained for conflict resolution or a red gate. Mark completion last.
@@ -265,12 +265,12 @@ merge_candidate() {
             [ "$pin" != "$base_pin" ] || continue
             real=$(git -C "$cand/$sm" rev-parse refs/agent/land-base)
             git -C "$repo/$sm" cat-file -e "$pin^{commit}" 2>/dev/null ||
-                stop "$sm: cannot move real tip $real to pin $pin: commit absent from real submodule repo. Fix the branch and harvest it again; remove $cand and rerun"
+                stop "$(name "$sm"): cannot move real tip $real to pin $pin: commit absent from real submodule repo. Fix the branch and harvest it again; remove $cand and rerun"
             git -C "$repo/$sm" merge-base --is-ancestor "$real" "$pin" ||
-                stop "$sm: cannot move real tip $real to pin $pin: not a fast-forward. Fix the branch and harvest it again; remove $cand and rerun"
+                stop "$(name "$sm"): cannot move real tip $real to pin $pin: not a fast-forward. Fix the branch and harvest it again; remove $cand and rerun"
             git -C "$cand/$sm" fetch -q --no-recurse-submodules "$repo/$sm" "$pin"
             git -C "$cand/$sm" merge --ff-only -q "$pin" ||
-                stop "$sm: cannot fast-forward candidate from real tip $real to pin $pin. Fix the branch and harvest it again; remove $cand and rerun"
+                stop "$(name "$sm"): cannot fast-forward candidate from real tip $real to pin $pin. Fix the branch and harvest it again; remove $cand and rerun"
         done
         # Re-pin bottom-up, committing each nearest parent before its parent
         # stages it. A submodule with its own branch still uses its merged HEAD.
