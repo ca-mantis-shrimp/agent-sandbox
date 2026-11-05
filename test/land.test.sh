@@ -118,6 +118,69 @@ land() { # <id> [gate]: agent-land's exit status
     (cd "$root" && AGENT_LAND_GATE=${2:-.sandbox/gate} "$tool/bin/agent-land" "$1") >"$tmp/land.stdout" 2>"$tmp/land.log"
 }
 
+# --- reviewed root-only pins must not be reset to the real branch tip --------
+
+# No submodule agent branch: the reviewed pin names an already-published commit.
+root_pin_workspace() { # <id> <pin>
+    mkdir -p "$AGENT_RUNS/$1"
+    printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/$1/manifest.json"
+    git -C "$root" switch -q -c "agent/$1"
+    git -C "$root" update-index --cacheinfo "160000,$2,sub"
+    git -C "$root" commit -q -m 'Move reviewed dependency pin'
+    git -C "$root" switch -q main
+}
+before_sub=$(head_of "$root/sub")
+git -C "$root/sub" switch -q -c published
+commit "$root/sub" state published
+published=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+root_pin_workspace published-pin "$published"
+land published-pin
+[ "$(head_of "$root/sub")" = "$published" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$published" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+
+# A known commit on a divergent line must stop before gating or advancing.
+git -C "$root/sub" switch -q -c divergent "$before_sub"
+commit "$root/sub" state divergent
+divergent=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+root_pin_workspace divergent-pin "$divergent"
+before_root=$(head_of "$root")
+: >"$GATE_LOG"
+fails land divergent-pin
+grep -Fq sub "$tmp/land.log"
+grep -Fq "$published" "$tmp/land.log"
+grep -Fq "$divergent" "$tmp/land.log"
+grep -Fq 'not a fast-forward' "$tmp/land.log"
+[ ! -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$published" ]
+
+# The gitlink alone does not prove that its object exists in the real repo.
+missing=1111111111111111111111111111111111111111
+root_pin_workspace missing-pin "$missing"
+: >"$GATE_LOG"
+fails land missing-pin
+grep -Fq sub "$tmp/land.log"
+grep -Fq "$published" "$tmp/land.log"
+grep -Fq "$missing" "$tmp/land.log"
+grep -Fq 'absent from real submodule repo' "$tmp/land.log"
+[ ! -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$published" ]
+
+# An owned submodule branch takes precedence even over a divergent root pin.
+workspace owned-pin
+owned=$(git -C "$root/sub" rev-parse agent/owned-pin)
+git -C "$root" switch -q agent/owned-pin
+git -C "$root" update-index --cacheinfo "160000,$divergent,sub"
+git -C "$root" commit -q -m 'Root pin superseded by submodule merge'
+git -C "$root" switch -q main
+land owned-pin
+git -C "$root/sub" merge-base --is-ancestor "$owned" HEAD
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
+
 # --- detached checkouts stop before cloning; a corrected rerun lands ----------
 
 workspace detached
