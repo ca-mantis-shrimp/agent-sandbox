@@ -232,6 +232,14 @@ commit or merge conflict is preferable to a garbled action line.
 5. Check fixes. A fix does not reconcile a finding; the human records reconciliation after checking it. Reviews advise landing, not gate it.
 6. Run `agent-harvest <workspace>` when no session is running; it fetches branches in each repo and shows commits and closing messages without merging. Harvest again after further sessions.
 7. Run `agent-land <workspace>`. Before merging, it checks the harvested branch's test-commit file locks in every repository (see below). It merges bottom-up into the candidate run directory `$AGENT_RUNS/land-<workspace>/work`, then starts `agent@land-<workspace>.service` with `AGENT_HARNESS=gate`. `agents/session` sources `.sandbox/setup`, runs the gate, and writes `gate.status` and `gate.log`. Landing requires both a successful unit outcome and gate status 0. No real branch advances until the gate passes. It prints unreconciled blocking findings for the human's decision.
+   A submodule with a harvested agent branch lands at its merged HEAD. Without
+   that branch, a reviewed gitlink move in its parent is preserved only if the
+   target commit exists in the real submodule repository and descends from its
+   real branch tip. Landing fast-forwards the candidate submodule to that commit,
+   gates the resulting pins, then advances the real branches submodules first.
+   A missing or non-fast-forward target stops before gating or advancing, naming
+   the submodule, real tip and requested pin. Nested submodules use their nearest
+   parent's gitlink, not the root's. Unchanged parent pins do not request a move.
 8. Record the human's, facilitator's or orchestrator's landing judgment with `agent-verdict`; then push separately. Without `--by`, the command defaults to the human only when stdin is a terminal; nonterminal calls that record a judgment must name the judge explicitly, preventing unattended callers from accidentally recording a human verdict.
 
 At landing the host builds the conversation from its session records, in session order, and writes it as one note (`refs/notes/review`) on the landed root commit. Each review starts `# review <workspace>/<n>: <verdict> by <model>`. Each finding has a stable ID, `<review session>#<1-based index>`, and a quickfix line: `file:line: severity: <id> what — why` (or `(approach): ...` without a file). Early findings may refer to lines that later fixes moved.

@@ -118,6 +118,191 @@ land() { # <id> [gate]: agent-land's exit status
     (cd "$root" && AGENT_LAND_GATE=${2:-.sandbox/gate} "$tool/bin/agent-land" "$1") >"$tmp/land.stdout" 2>"$tmp/land.log"
 }
 
+# --- reviewed root-only pins must not be reset to the real branch tip --------
+
+# No submodule agent branch: the reviewed pin names an already-published commit.
+root_pin_workspace() { # <id> <pin>
+    mkdir -p "$AGENT_RUNS/$1"
+    printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/$1/manifest.json"
+    git -C "$root" switch -q -c "agent/$1"
+    git -C "$root" update-index --cacheinfo "160000,$2,sub"
+    git -C "$root" commit -q -m 'Move reviewed dependency pin'
+    git -C "$root" switch -q main
+}
+# Root-only work starts before another workspace advances the dependency.
+mkdir -p "$AGENT_RUNS/stale-root"
+printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/stale-root/manifest.json"
+git -C "$root" switch -q -c agent/stale-root
+commit "$root" stale-note 'root-only work'
+stale_root=$(head_of "$root")
+git -C "$root" switch -q main
+
+before_sub=$(head_of "$root/sub")
+git -C "$root/sub" switch -q -c published
+commit "$root/sub" state published
+published=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+root_pin_workspace published-pin "$published"
+land published-pin
+[ "$(head_of "$root/sub")" = "$published" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$published" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+
+# The stale branch never changed its gitlink: keep main's newer dependency,
+# gate it, and still land the root work rather than treating it as a rollback.
+: >"$GATE_LOG"
+land stale-root
+git -C "$root" merge-base --is-ancestor "$stale_root" HEAD
+[ "$(git -C "$root" show HEAD:stale-note)" = 'root-only work' ]
+[ "$(head_of "$root/sub")" = "$published" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$published" ]
+[ -s "$GATE_LOG" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+
+# Main may add a dependency after root-only work forks. Neither the branch
+# nor its merge-base has that path: landing must keep main's pin and root work.
+saved_root=$root
+root="$tmp/late-root"
+git init -q -b main "$root"
+sandboxed "$root"
+mkdir -p "$AGENT_RUNS/late-submodule"
+printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/late-submodule/manifest.json"
+git -C "$root" switch -q -c agent/late-submodule
+commit "$root" late-note 'root-only work before dependency'
+late_work=$(head_of "$root")
+git -C "$root" switch -q main
+git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" sub2
+git -C "$root" commit -q -am 'Main adds dependency after fork'
+git -C "$root/sub2" switch -q main
+late_pin=$(head_of "$root/sub2")
+: >"$GATE_LOG"
+land late-submodule
+git -C "$root" merge-base --is-ancestor "$late_work" HEAD
+[ "$(git -C "$root" show HEAD:late-note)" = 'root-only work before dependency' ]
+[ "$(head_of "$root/sub2")" = "$late_pin" ]
+[ "$(git -C "$root" rev-parse HEAD:sub2)" = "$late_pin" ]
+[ -s "$GATE_LOG" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+fails grep -Eiq 'fatal:|error:' "$tmp/land.log"
+root=$saved_root
+rm -f "$AGENT_LAYERS/.build/late-root.lock"
+
+# A known commit on a divergent line must stop before gating or advancing.
+git -C "$root/sub" switch -q -c divergent "$before_sub"
+commit "$root/sub" state divergent
+divergent=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+root_pin_workspace divergent-pin "$divergent"
+before_root=$(head_of "$root")
+: >"$GATE_LOG"
+fails land divergent-pin
+grep -Fq sub "$tmp/land.log"
+grep -Fq "$published" "$tmp/land.log"
+grep -Fq "$divergent" "$tmp/land.log"
+grep -Fq 'not a fast-forward' "$tmp/land.log"
+grep -Fq "Fix the branch and harvest it again; remove $AGENT_RUNS/land-divergent-pin/work and rerun" "$tmp/land.log"
+[ ! -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$published" ]
+
+# The gitlink alone does not prove that its object exists in the real repo.
+missing=1111111111111111111111111111111111111111
+root_pin_workspace missing-pin "$missing"
+: >"$GATE_LOG"
+fails land missing-pin
+grep -Fq sub "$tmp/land.log"
+grep -Fq "$published" "$tmp/land.log"
+grep -Fq "$missing" "$tmp/land.log"
+grep -Fq 'absent from real submodule repo' "$tmp/land.log"
+grep -Fq "Fix the branch and harvest it again; remove $AGENT_RUNS/land-missing-pin/work and rerun" "$tmp/land.log"
+[ ! -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$before_root" ]
+[ "$(head_of "$root/sub")" = "$published" ]
+
+# An owned submodule branch takes precedence even over a divergent root pin.
+workspace owned-pin
+owned=$(git -C "$root/sub" rev-parse agent/owned-pin)
+git -C "$root" switch -q agent/owned-pin
+git -C "$root" update-index --cacheinfo "160000,$divergent,sub"
+git -C "$root" commit -q -m 'Root pin superseded by submodule merge'
+git -C "$root" switch -q main
+land owned-pin
+git -C "$root/sub" merge-base --is-ancestor "$owned" HEAD
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
+
+# Nested pins follow the newly adopted nearest parent's tree, without agent
+# branches in either dependency. Only the root has reviewed work to merge.
+saved_root=$root
+root="$tmp/nested-root"
+git init -q -b main "$tmp/nested-parent"
+commit "$tmp/nested-parent" state parent
+git -C "$tmp/nested-parent" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" leaf
+git -C "$tmp/nested-parent" commit -q -am 'Add nested dependency'
+git init -q -b main "$root"
+git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/nested-parent" sub
+sandboxed "$root"
+git -C "$root" -c protocol.file.allow=always submodule -q update --init --recursive
+git -C "$root/sub" switch -q main
+git -C "$root/sub/leaf" switch -q main
+git -C "$root/sub/leaf" switch -q -c published-leaf
+commit "$root/sub/leaf" state published-leaf
+leaf_pin=$(head_of "$root/sub/leaf")
+git -C "$root/sub" switch -q -c published-parent
+git -C "$root/sub" add leaf
+git -C "$root/sub" commit -q -m 'Publish nested pin'
+parent_pin=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+git -C "$root/sub/leaf" switch -q main
+root_pin_workspace nested-pin "$parent_pin"
+land nested-pin
+[ "$(head_of "$root/sub")" = "$parent_pin" ]
+[ "$(head_of "$root/sub/leaf")" = "$leaf_pin" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$parent_pin" ]
+[ "$(git -C "$root/sub" rev-parse HEAD:leaf)" = "$leaf_pin" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+
+# Only the nested leaf has an agent branch. Landing must create a pin commit
+# in its otherwise untouched parent, gate it, then fast-forward real main.
+mkdir -p "$AGENT_RUNS/nested-owned"
+printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/nested-owned/manifest.json"
+parent_base=$(head_of "$root/sub")
+leaf_base=$(head_of "$root/sub/leaf")
+root_base=$(head_of "$root")
+git -C "$root/sub/leaf" switch -q -c agent/nested-owned
+commit "$root/sub/leaf" state nested-owned
+owned_leaf=$(head_of "$root/sub/leaf")
+git -C "$root/sub/leaf" switch -q main
+fails git -C "$root/sub" show-ref --verify --quiet refs/heads/agent/nested-owned
+: >"$GATE_LOG"
+fails land nested-owned false
+[ -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$root_base" ]
+[ "$(head_of "$root/sub")" = "$parent_base" ]
+[ "$(head_of "$root/sub/leaf")" = "$leaf_base" ]
+candidate="$AGENT_RUNS/land-nested-owned/work"
+parent_tip=$(head_of "$candidate/sub")
+leaf_tip=$(head_of "$candidate/sub/leaf")
+[ "$(git -C "$candidate/sub" log -1 --format=%s)" = 'Pin submodules: land agent/nested-owned' ]
+[ "$(git -C "$candidate/sub" rev-parse HEAD^)" = "$parent_base" ]
+[ "$(git -C "$candidate/sub" rev-list --parents -n1 HEAD | wc -w)" -eq 2 ]
+git -C "$candidate/sub" log -1 --format=%B | grep -Fqx 'Agent-Workspace: nested-owned'
+git -C "$candidate/sub/leaf" merge-base --is-ancestor "$owned_leaf" HEAD
+[ "$(git -C "$candidate/sub" rev-parse HEAD:leaf)" = "$leaf_tip" ]
+[ "$(git -C "$candidate" rev-parse HEAD:sub)" = "$parent_tip" ]
+: >"$GATE_LOG"
+land nested-owned
+[ -s "$GATE_LOG" ]
+[ "$(git -C "$root/sub" symbolic-ref --short HEAD)" = main ]
+[ "$(head_of "$root/sub")" = "$parent_tip" ]
+[ "$(head_of "$root/sub/leaf")" = "$leaf_tip" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$parent_tip" ]
+[ "$(git -C "$root/sub" rev-parse HEAD:leaf)" = "$leaf_tip" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+[ ! -d "$candidate" ]
+root=$saved_root
+# Later lock assertions enumerate all layer locks in this shared fixture.
+rm -f "$AGENT_LAYERS/.build/nested-root.lock"
+
 # --- detached checkouts stop before cloning; a corrected rerun lands ----------
 
 workspace detached
@@ -154,7 +339,7 @@ fails land unpinned
 grep -Fq "sub" "$tmp/land.log"
 grep -Fq "$pinned" "$tmp/land.log"
 grep -Fq "$ahead" "$tmp/land.log"
-grep -Fq 'commit the submodule pointer in the root first' "$tmp/land.log"
+grep -Fq 'commit the submodule pointer in the nearest parent first' "$tmp/land.log"
 [ ! -e "$AGENT_RUNS/land-unpinned/work" ]
 [ ! -s "$GATE_LOG" ]
 [ "$(head_of "$root")" = "$before_root" ]

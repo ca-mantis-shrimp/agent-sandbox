@@ -8,8 +8,10 @@
 #
 # No real branch moves until the gate passes. The merge is built in a candidate
 # clone, $AGENT_RUNS/land-<id>/work: submodules merge first, then the root repo,
-# which pins each submodule at its merged HEAD. (Merging the root alone lets git
-# keep one side's pin and silently drop the other side's submodule work.) The
+# which pins each submodule at its merged HEAD. Without a submodule agent branch,
+# a reviewed parent pin move is preserved only when its commit exists in the real
+# submodule repo and fast-forwards its real branch tip. Nested pins use the nearest
+# parent's tree. (Merging the root alone can silently drop submodule work.) The
 # gate runs on the candidate through the same static agent@ unit and prebuilt
 # host layers as a session: .sandbox/setup
 # is sourced, then .sandbox/gate runs ($AGENT_LAND_GATE overrides it). Only
@@ -131,6 +133,14 @@ EOF
     [ "$bad" = false ]
 )
 
+parent_of() { # <submodule>: nearest containing repo, not just dirname
+    parent=$(dirname "$1")
+    while [ "$parent" != . ] && ! printf '%s\n' "$submodules" | grep -qxF "$parent"; do
+        parent=$(dirname "$parent")
+    done
+    printf '%s\n' "$parent"
+}
+
 # Clone the real checkout, each repo on its real branch's name so merge
 # messages read as before, and mark where each started: refs/agent/land-base.
 build_candidate() {
@@ -143,15 +153,12 @@ build_candidate() {
     # Cloning initializes submodules at the root's pins, not their branch tips.
     for sm in $submodules; do
         real=$(git -C "$repo/$sm" rev-parse HEAD)
-        parent=$(dirname "$sm")
-        while [ "$parent" != . ] && ! printf '%s\n' "$submodules" | grep -qxF "$parent"; do
-            parent=$(dirname "$parent")
-        done
+        parent=$(parent_of "$sm")
         path=$sm
         [ "$parent" = . ] || path=${sm#"$parent"/}
         pinned=$(git -C "$repo/$parent" rev-parse "HEAD:$path")
         [ "$real" = "$pinned" ] ||
-            stop "$(name "$sm"): real branch tip $real differs from root pin $pinned; commit the submodule pointer in the root first"
+            stop "$(name "$sm"): real branch tip $real differs from parent pin $pinned; commit the submodule pointer in the nearest parent first"
     done
     # A failed or interrupted build is disposable, unlike a completed candidate
     # retained for conflict resolution or a red gate. Mark completion last.
@@ -162,6 +169,13 @@ build_candidate() {
     say "building the candidate in $cand"
     mkdir -p "$run"
     clone_local "$repo" "$cand"
+    # clone_local initializes direct children; populate nested repos from their
+    # real checkouts too, never accidentally run Git in the enclosing parent.
+    for sm in $(printf '%s\n' "$submodules" | sort); do
+        if [ "$(git -C "$cand/$sm" rev-parse --show-toplevel)" != "$cand/$sm" ]; then
+            clone_local "$repo/$sm" "$cand/$sm"
+        fi
+    done
     for sm in . $submodules; do
         real_branch=$(git -C "$repo/$sm" symbolic-ref -q --short HEAD) ||
             stop "$(name "$sm") is on a detached HEAD; switch it to its default branch first"
@@ -230,9 +244,50 @@ merge_candidate() {
             [ -z "$conflicts" ] ||
                 stop "conflict in $(name .): $conflicts; resolve and commit it in $cand, then rerun"
         fi
-        # Pin every submodule at its merged HEAD.
-        # shellcheck disable=SC2086
-        [ -z "$submodules" ] || git add $submodules
+        # Adopt parent-only pin moves top-down, so a nested dependency sees its
+        # nearest parent's reviewed tree, including a newly adopted parent pin.
+        for sm in $(printf '%s\n' "$submodules" | sort); do
+            git -C "$cand/$sm" show-ref --verify --quiet "refs/heads/$branch" && continue
+            parent=$(parent_of "$sm")
+            path=$sm
+            [ "$parent" = . ] || path=${sm#"$parent"/}
+            source=HEAD
+            base=refs/agent/land-base
+            if git -C "$cand/$parent" show-ref --verify --quiet "refs/heads/$branch"; then
+                source=$branch
+                # Only changes made on the reviewed branch request a pin move.
+                # Use the saved pre-merge tip: parent submodules may already
+                # have merged the branch, and main may have advanced its pin.
+                base=$(git -C "$cand/$parent" merge-base "$base" "$branch")
+            fi
+            # Main may have added this path after the reviewed branch forked.
+            # A path absent from either tree is not a reviewed pin move.
+            pin=$(git -C "$cand/$parent" rev-parse --verify "$source:$path" 2>/dev/null) || continue
+            base_pin=$(git -C "$cand/$parent" rev-parse --verify "$base:$path" 2>/dev/null) || continue
+            [ "$pin" != "$base_pin" ] || continue
+            real=$(git -C "$cand/$sm" rev-parse refs/agent/land-base)
+            git -C "$repo/$sm" cat-file -e "$pin^{commit}" 2>/dev/null ||
+                stop "$(name "$sm"): cannot move real tip $real to pin $pin: commit absent from real submodule repo. Fix the branch and harvest it again; remove $cand and rerun"
+            git -C "$repo/$sm" merge-base --is-ancestor "$real" "$pin" ||
+                stop "$(name "$sm"): cannot move real tip $real to pin $pin: not a fast-forward. Fix the branch and harvest it again; remove $cand and rerun"
+            git -C "$cand/$sm" fetch -q --no-recurse-submodules "$repo/$sm" "$pin"
+            git -C "$cand/$sm" merge --ff-only -q "$pin" ||
+                stop "$(name "$sm"): cannot fast-forward candidate from real tip $real to pin $pin. Fix the branch and harvest it again; remove $cand and rerun"
+        done
+        # Re-pin bottom-up, committing each nearest parent before its parent
+        # stages it. A submodule with its own branch still uses its merged HEAD.
+        for parent in $submodules .; do
+            for sm in $submodules; do
+                [ "$(parent_of "$sm")" = "$parent" ] || continue
+                path=$sm
+                [ "$parent" = . ] || path=${sm#"$parent"/}
+                git -C "$cand/$parent" add "$path"
+            done
+            [ "$parent" != . ] || continue
+            if ! git -C "$cand/$parent" diff --cached --quiet; then
+                commit_with_workspace_message "$cand/$parent" "Pin submodules: land $branch"
+            fi
+        done
         if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
             commit_with_workspace_message "$cand" "Merge branch '$branch'"
         elif ! git diff --cached --quiet; then
