@@ -129,6 +129,14 @@ root_pin_workspace() { # <id> <pin>
     git -C "$root" commit -q -m 'Move reviewed dependency pin'
     git -C "$root" switch -q main
 }
+# Root-only work starts before another workspace advances the dependency.
+mkdir -p "$AGENT_RUNS/stale-root"
+printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/stale-root/manifest.json"
+git -C "$root" switch -q -c agent/stale-root
+commit "$root" stale-note 'root-only work'
+stale_root=$(head_of "$root")
+git -C "$root" switch -q main
+
 before_sub=$(head_of "$root/sub")
 git -C "$root/sub" switch -q -c published
 commit "$root/sub" state published
@@ -138,6 +146,17 @@ root_pin_workspace published-pin "$published"
 land published-pin
 [ "$(head_of "$root/sub")" = "$published" ]
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$published" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+
+# The stale branch never changed its gitlink: keep main's newer dependency,
+# gate it, and still land the root work rather than treating it as a rollback.
+: >"$GATE_LOG"
+land stale-root
+git -C "$root" merge-base --is-ancestor "$stale_root" HEAD
+[ "$(git -C "$root" show HEAD:stale-note)" = 'root-only work' ]
+[ "$(head_of "$root/sub")" = "$published" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$published" ]
+[ -s "$GATE_LOG" ]
 [ -z "$(git -C "$root" status --porcelain)" ]
 
 # A known commit on a divergent line must stop before gating or advancing.
