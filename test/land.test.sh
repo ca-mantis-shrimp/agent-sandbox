@@ -172,6 +172,7 @@ grep -Fq sub "$tmp/land.log"
 grep -Fq "$published" "$tmp/land.log"
 grep -Fq "$divergent" "$tmp/land.log"
 grep -Fq 'not a fast-forward' "$tmp/land.log"
+grep -Fq "Fix the branch and harvest it again; remove $AGENT_RUNS/land-divergent-pin/work and rerun" "$tmp/land.log"
 [ ! -s "$GATE_LOG" ]
 [ "$(head_of "$root")" = "$before_root" ]
 [ "$(head_of "$root/sub")" = "$published" ]
@@ -185,6 +186,7 @@ grep -Fq sub "$tmp/land.log"
 grep -Fq "$published" "$tmp/land.log"
 grep -Fq "$missing" "$tmp/land.log"
 grep -Fq 'absent from real submodule repo' "$tmp/land.log"
+grep -Fq "Fix the branch and harvest it again; remove $AGENT_RUNS/land-missing-pin/work and rerun" "$tmp/land.log"
 [ ! -s "$GATE_LOG" ]
 [ "$(head_of "$root")" = "$before_root" ]
 [ "$(head_of "$root/sub")" = "$published" ]
