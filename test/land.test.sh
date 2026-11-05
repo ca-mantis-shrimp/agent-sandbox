@@ -232,6 +232,45 @@ land nested-pin
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$parent_pin" ]
 [ "$(git -C "$root/sub" rev-parse HEAD:leaf)" = "$leaf_pin" ]
 [ -z "$(git -C "$root" status --porcelain)" ]
+
+# Only the nested leaf has an agent branch. Landing must create a pin commit
+# in its otherwise untouched parent, gate it, then fast-forward real main.
+mkdir -p "$AGENT_RUNS/nested-owned"
+printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/nested-owned/manifest.json"
+parent_base=$(head_of "$root/sub")
+leaf_base=$(head_of "$root/sub/leaf")
+root_base=$(head_of "$root")
+git -C "$root/sub/leaf" switch -q -c agent/nested-owned
+commit "$root/sub/leaf" state nested-owned
+owned_leaf=$(head_of "$root/sub/leaf")
+git -C "$root/sub/leaf" switch -q main
+fails git -C "$root/sub" show-ref --verify --quiet refs/heads/agent/nested-owned
+: >"$GATE_LOG"
+fails land nested-owned false
+[ -s "$GATE_LOG" ]
+[ "$(head_of "$root")" = "$root_base" ]
+[ "$(head_of "$root/sub")" = "$parent_base" ]
+[ "$(head_of "$root/sub/leaf")" = "$leaf_base" ]
+candidate="$AGENT_RUNS/land-nested-owned/work"
+parent_tip=$(head_of "$candidate/sub")
+leaf_tip=$(head_of "$candidate/sub/leaf")
+[ "$(git -C "$candidate/sub" log -1 --format=%s)" = 'Pin submodules: land agent/nested-owned' ]
+[ "$(git -C "$candidate/sub" rev-parse HEAD^)" = "$parent_base" ]
+[ "$(git -C "$candidate/sub" rev-list --parents -n1 HEAD | wc -w)" -eq 2 ]
+git -C "$candidate/sub" log -1 --format=%B | grep -Fqx 'Agent-Workspace: nested-owned'
+git -C "$candidate/sub/leaf" merge-base --is-ancestor "$owned_leaf" HEAD
+[ "$(git -C "$candidate/sub" rev-parse HEAD:leaf)" = "$leaf_tip" ]
+[ "$(git -C "$candidate" rev-parse HEAD:sub)" = "$parent_tip" ]
+: >"$GATE_LOG"
+land nested-owned
+[ -s "$GATE_LOG" ]
+[ "$(git -C "$root/sub" symbolic-ref --short HEAD)" = main ]
+[ "$(head_of "$root/sub")" = "$parent_tip" ]
+[ "$(head_of "$root/sub/leaf")" = "$leaf_tip" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$parent_tip" ]
+[ "$(git -C "$root/sub" rev-parse HEAD:leaf)" = "$leaf_tip" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+[ ! -d "$candidate" ]
 root=$saved_root
 # Later lock assertions enumerate all layer locks in this shared fixture.
 rm -f "$AGENT_LAYERS/.build/nested-root.lock"
@@ -272,7 +311,7 @@ fails land unpinned
 grep -Fq "sub" "$tmp/land.log"
 grep -Fq "$pinned" "$tmp/land.log"
 grep -Fq "$ahead" "$tmp/land.log"
-grep -Fq 'commit the submodule pointer in the root first' "$tmp/land.log"
+grep -Fq 'commit the submodule pointer in the' "$tmp/land.log"
 [ ! -e "$AGENT_RUNS/land-unpinned/work" ]
 [ ! -s "$GATE_LOG" ]
 [ "$(head_of "$root")" = "$before_root" ]
