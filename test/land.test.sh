@@ -181,6 +181,40 @@ land owned-pin
 git -C "$root/sub" merge-base --is-ancestor "$owned" HEAD
 [ "$(git -C "$root" rev-parse HEAD:sub)" = "$(head_of "$root/sub")" ]
 
+# Nested pins follow the newly adopted nearest parent's tree, without agent
+# branches in either dependency. Only the root has reviewed work to merge.
+saved_root=$root
+root="$tmp/nested-root"
+git init -q -b main "$tmp/nested-parent"
+commit "$tmp/nested-parent" state parent
+git -C "$tmp/nested-parent" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" leaf
+git -C "$tmp/nested-parent" commit -q -am 'Add nested dependency'
+git init -q -b main "$root"
+git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/nested-parent" sub
+sandboxed "$root"
+git -C "$root" -c protocol.file.allow=always submodule -q update --init --recursive
+git -C "$root/sub" switch -q main
+git -C "$root/sub/leaf" switch -q main
+git -C "$root/sub/leaf" switch -q -c published-leaf
+commit "$root/sub/leaf" state published-leaf
+leaf_pin=$(head_of "$root/sub/leaf")
+git -C "$root/sub" switch -q -c published-parent
+git -C "$root/sub" add leaf
+git -C "$root/sub" commit -q -m 'Publish nested pin'
+parent_pin=$(head_of "$root/sub")
+git -C "$root/sub" switch -q main
+git -C "$root/sub/leaf" switch -q main
+root_pin_workspace nested-pin "$parent_pin"
+land nested-pin
+[ "$(head_of "$root/sub")" = "$parent_pin" ]
+[ "$(head_of "$root/sub/leaf")" = "$leaf_pin" ]
+[ "$(git -C "$root" rev-parse HEAD:sub)" = "$parent_pin" ]
+[ "$(git -C "$root/sub" rev-parse HEAD:leaf)" = "$leaf_pin" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+root=$saved_root
+# Later lock assertions enumerate all layer locks in this shared fixture.
+rm -f "$AGENT_LAYERS/.build/nested-root.lock"
+
 # --- detached checkouts stop before cloning; a corrected rerun lands ----------
 
 workspace detached
