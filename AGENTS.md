@@ -19,5 +19,5 @@ Ground rules:
 
 Who works here: the orchestrator, or this project's own steward once it has one (Darrion, 2026-11-05). Landings
 don't wait on Darrion's verdict; they can read any they choose (Darrion, 2026-10-31: "agent sandbox is more your project so
-you can iterate more quickly", said to the facilitator before the orchestrator and stewards took the work). They keep
+you can iterate more quickly", said to the facilitator before the orchestrator and stewards took the work). Darrion keeps
 asking whether it is too big for a bunch of bash.
