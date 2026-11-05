@@ -252,11 +252,16 @@ merge_candidate() {
             path=$sm
             [ "$parent" = . ] || path=${sm#"$parent"/}
             source=HEAD
+            base=refs/agent/land-base
             if git -C "$cand/$parent" show-ref --verify --quiet "refs/heads/$branch"; then
                 source=$branch
+                # Only changes made on the reviewed branch request a pin move.
+                # Use the saved pre-merge tip: parent submodules may already
+                # have merged the branch, and main may have advanced its pin.
+                base=$(git -C "$cand/$parent" merge-base "$base" "$branch")
             fi
             pin=$(git -C "$cand/$parent" rev-parse "$source:$path")
-            base_pin=$(git -C "$cand/$parent" rev-parse "refs/agent/land-base:$path")
+            base_pin=$(git -C "$cand/$parent" rev-parse "$base:$path")
             [ "$pin" != "$base_pin" ] || continue
             real=$(git -C "$cand/$sm" rev-parse refs/agent/land-base)
             git -C "$repo/$sm" cat-file -e "$pin^{commit}" 2>/dev/null ||
