@@ -159,6 +159,34 @@ git -C "$root" merge-base --is-ancestor "$stale_root" HEAD
 [ -s "$GATE_LOG" ]
 [ -z "$(git -C "$root" status --porcelain)" ]
 
+# Main may add a dependency after root-only work forks. Neither the branch
+# nor its merge-base has that path: landing must keep main's pin and root work.
+saved_root=$root
+root="$tmp/late-root"
+git init -q -b main "$root"
+sandboxed "$root"
+mkdir -p "$AGENT_RUNS/late-submodule"
+printf '{"repo":"%s"}\n' "$root" >"$AGENT_RUNS/late-submodule/manifest.json"
+git -C "$root" switch -q -c agent/late-submodule
+commit "$root" late-note 'root-only work before dependency'
+late_work=$(head_of "$root")
+git -C "$root" switch -q main
+git -C "$root" -c protocol.file.allow=always submodule -q add "$tmp/sub-src" sub2
+git -C "$root" commit -q -am 'Main adds dependency after fork'
+git -C "$root/sub2" switch -q main
+late_pin=$(head_of "$root/sub2")
+: >"$GATE_LOG"
+land late-submodule
+git -C "$root" merge-base --is-ancestor "$late_work" HEAD
+[ "$(git -C "$root" show HEAD:late-note)" = 'root-only work before dependency' ]
+[ "$(head_of "$root/sub2")" = "$late_pin" ]
+[ "$(git -C "$root" rev-parse HEAD:sub2)" = "$late_pin" ]
+[ -s "$GATE_LOG" ]
+[ -z "$(git -C "$root" status --porcelain)" ]
+fails grep -Eiq 'fatal:|error:' "$tmp/land.log"
+root=$saved_root
+rm -f "$AGENT_LAYERS/.build/late-root.lock"
+
 # A known commit on a divergent line must stop before gating or advancing.
 git -C "$root/sub" switch -q -c divergent "$before_sub"
 commit "$root/sub" state divergent
@@ -311,7 +339,7 @@ fails land unpinned
 grep -Fq "sub" "$tmp/land.log"
 grep -Fq "$pinned" "$tmp/land.log"
 grep -Fq "$ahead" "$tmp/land.log"
-grep -Fq 'commit the submodule pointer in the' "$tmp/land.log"
+grep -Fq 'commit the submodule pointer in the nearest parent first' "$tmp/land.log"
 [ ! -e "$AGENT_RUNS/land-unpinned/work" ]
 [ ! -s "$GATE_LOG" ]
 [ "$(head_of "$root")" = "$before_root" ]
