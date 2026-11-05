@@ -260,8 +260,10 @@ merge_candidate() {
                 # have merged the branch, and main may have advanced its pin.
                 base=$(git -C "$cand/$parent" merge-base "$base" "$branch")
             fi
-            pin=$(git -C "$cand/$parent" rev-parse "$source:$path")
-            base_pin=$(git -C "$cand/$parent" rev-parse "$base:$path")
+            # Main may have added this path after the reviewed branch forked.
+            # A path absent from either tree is not a reviewed pin move.
+            pin=$(git -C "$cand/$parent" rev-parse --verify "$source:$path" 2>/dev/null) || continue
+            base_pin=$(git -C "$cand/$parent" rev-parse --verify "$base:$path" 2>/dev/null) || continue
             [ "$pin" != "$base_pin" ] || continue
             real=$(git -C "$cand/$sm" rev-parse refs/agent/land-base)
             git -C "$repo/$sm" cat-file -e "$pin^{commit}" 2>/dev/null ||
