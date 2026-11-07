@@ -1,39 +1,76 @@
 # Does the sandbox earn its complexity?
 
 The steward's answer, 2026-11-07, to Darrion's question that day: "do we like the tool? its functionality justifies the
-complexity? theres no better architecture staring at me?" (=earns-its-keep). Measured from this repository, `~/Products`,
-`/var/lib/agent-runs` and the Claude transcripts on this host. Every number below says how it was measured. A
-guess is labelled as one.
+complexity? theres no better architecture staring at me?" (=earns-its-keep). Darrion added: "always think what would
+the ideal version of this tool look like". So the page starts from the ideal version and measures today's tool against it.
+Measured from this repository, `~/Products`, `/var/lib/agent-runs`, `~/.local/state/workflows` and the Claude
+transcripts on this host. Every number below says how it was measured. A guess is labelled as one.
 
-## The answer
+## The ideal version
 
-**Yes, it earns its complexity, and no rebuild is warranted.** It may get about 8% smaller, if the one command
-nobody seems to use is deleted, and it should gain a linter.
+The ideal sandbox does five jobs and nothing else:
 
+1. **Isolate.** It runs one agent on one prompt in a declared systemd unit, over a pinned image. Network and spend
+   are bounded, and no credential enters but the model's own.
+2. **Run and record.** Each session leaves one record (outcome, commits, closing message, structured report) that any
+   driver can wait on and read. A session can ask its launcher a question.
+3. **Carry.** Git is the only output channel: commits come back as bundles, fetched without running Git in agent-written
+   clones.
+4. **Gate and land.** It merges into a candidate, gates the candidate under the same isolation, and advances the real
+   branches only on green.
+5. **Keep the review with the code.** The review conversation and the verdicts are append-only git records on the
+   landed commit (Decisions 1–4).
+
+Everything else belongs to someone else. Sequencing belongs to the drivers (Dagu's workflows, platform's
+`clearhead-work`, a person with `dispatch`). Credentials, timers and installation belong to the host. Accounting
+belongs to whoever measures.
+
+## Today's tool against it
+
+**It is close to the ideal, and it earns its complexity. No rebuild is warranted.** Lines by job (`wc -l`, the unit and
+completions included):
+
+| Job | Today | Lines |
+| --- | --- | ---: |
+| 1 Isolate | `agent@.service`, `agents/session`, `agent-layer`, host extension, `agent-doctor` | 599 |
+| 2 Run and record | `agent-new`, `-run`, `-result`, `-reconcile`, `-stop`, `-status`, `-retire`, `agent-systemd.sh`; questions 228 | 912 |
+| 3 Carry | `agents/export`, `agent-harvest` | 118 |
+| 4 Gate and land | `agent-land` | 457 |
+| 5 Review record | `agent-verdict`, `agent-show`, `agent-review.jq` | 302 |
+| Shared | `agent-runs.sh`, the `agent` dispatcher and completions, the commit guard | 424 |
+| Driver helpers | `agent-fix`, `agent-review-status` | 169 |
+| None of the five | `agent-usage` 236, `agent-mailbox` 43 | 279 |
+
+- **Outside the ideal: 279 lines (9%).** `agent-usage` is accounting and `agent-mailbox` is an ssh inbox; neither is a
+  sandbox job. Both are delete-or-move candidates below.
+- **Driver logic kept here: 169 lines (5%).** `agent-fix` builds a fix prompt, and `agent-review-status` turns a
+  verdict into an exit code. In the ideal they belong to drivers, but three drivers share them. They stay, and
+  no more loop logic comes in.
+- **Bigger than the ideal within a job.** Landing is mostly multi-repo submodule landing: 16 of the 59 findings and 12
+  fix commits for 457 lines. Platform uses it: 15 submodule merges since 2026-10-01. Running and recording is the
+  largest job (912). It is the record any driver reads, and the next section shows that Dagu does not hold the same
+  state. How much smaller the ideal would be within these jobs is a guess: perhaps 10–20%, mostly in landing.
 - **Use.** 126 workspaces, 453 sessions and 92 gated landings in four weeks (`/var/lib/agent-runs`, 2026-10-10 to
-  2026-11-07). Three repositories call it from code (assistant, meta-analysis, platform), and the Dagu workflows are
-  built on it. Six repositories ran work in it: srr 52 workspaces, agent-sandbox 32, platform 18, assistant 7,
-  meta-analysis 6, yapdm 2. The other 9 were scratch repositories under `/tmp` or have no recorded repository.
-- **Size.** 29 shell files with 2,888 lines (2,344 without comments and blank lines), plus 228 lines of jq. The unit,
-  completions and packaging are not counted. The 3,694 test lines outnumber the code.
+  2026-11-07). Three repositories call it from code (assistant, meta-analysis, platform). Six repositories ran work
+  in it: srr 52 workspaces, agent-sandbox 32, platform 18, assistant 7, meta-analysis 6, yapdm 2. The other 9 were
+  scratch repositories under `/tmp` or have no recorded repository.
+- **Size.** 29 shell files with 2,888 lines (2,344 without comments and blank lines), plus 228 lines of jq. The
+  3,694 test lines outnumber the code.
 - **Bash is not the problem.** 5 of the 59 review findings since 2026-10-25 are clearly shell-specific, and 3 more
   partly. That is 8–14%, and none of the 5 blocking findings is purely shell-specific. The 2026-10-25 survey of 49
   defect fixes found 8–11 shell-shaped (16–22%). That share is history, not a bound: another language could also
   prevent some logic errors, or add its own. But the defects we have are mostly logic and design, which survive
   a port of roughly 3k code lines and 3.7k test lines. Shellcheck is cheap but narrow. It catches the 16 no-op `! cmd`
   assertions (SC2251) and quoting, not lost pipeline statuses or races, so it is hygiene, not the answer to those.
-- **No better architecture is staring at us.** The suspected overlaps are not there, as the next section shows. The
-  complexity sits in two places, and both carry features that were asked for. Landing (`agent-harvest`,
-  `agent-land`: 544 lines, 16 of the 59 findings, 12 fix commits) is mostly multi-repo submodule landing, which platform
-  uses: 15 submodule merges since 2026-10-01. The review record (`agent-fix`, `-review-status`, `-verdict`, `-show`,
-  `agent-review.jq`: 471 lines) implements Decisions 1–4 and 8.
 
 ## The suspected overlaps
 
 | Suspicion | Finding |
 | --- | --- |
 | Dagu workflows re-encode fix, review-status and land | No. `wf-cycle` and `wf-land` call `agent-review-status`, `agent-fix`, `agent-harvest` and `agent-land` as primitives. None of them parses reviews, builds fix prompts or merges. The workflow sequences; the sandbox does each step. |
-| Isolation duplicates podman, systemd-nspawn or bubblewrap | No. Isolation is `agent@.service`, 79 lines of systemd directives (RootDirectory, ExtensionImages, ProtectSystem, PrivatePIDs, IPAddressDeny, ...). Images come from mkosi via `agent-layer` (144 lines). Moving to podman or bubblewrap would replace this declaration, not remove any shell. That move is already ruled out: meta-analysis decided on systemd, not podman. |
+| Run bookkeeping (`agent-status`, `-show`, `-result`, `-review-status`, `-mailbox`, `-reconcile`) duplicates the history and waiting state Dagu keeps | No. Dagu started 127 of the 174 sessions since it arrived on 2026-10-31 (73%, refs under `~/.local/state/workflows`). The rest, started by hand or by `clearhead-work`, have only the sandbox's records. Dagu also sees only a step's exit code and stdout. The unit outcome, commits, closing message, review report, questions and tool calls exist only in the session records: `agent-reconcile` writes them, and `agent-result` and `agent-status` read them. `agent-show` reads git notes, and `agent-mailbox` is an ssh inbox; neither touches run state. The one overlap is waiting (`wf-session` around `agent-result --wait`), and it exists because the unit outlives a restarted Dagu step. Making `wf-cycle` declarative is meta-analysis's choice, and it would not remove sandbox code: its steps are these commands. |
+| Isolation duplicates podman, systemd-nspawn or bubblewrap | No. Isolation is `agent@.service`, 79 lines of systemd directives. |
+| Layering adds little over plain mkosi | It adds the ability to vary harness and project independently on one pinned base. Today there are one harness layer and three project layers (meta-analysis, platform, yapdm; srr needs none). With plain mkosi, each project would get a whole image, and every harness update would rebuild all of them. The layering costs a few lines in `agent-layer` and `ensure_layers` (34) and two `ExtensionImages` lines. Plain mkosi would still need the staleness logic. Not worth changing, and Darrion said not to fixate on it. |
 | Verdicts belong on the approval record | Probably, later. =verdicts-as-approvals already plans it and waits on meta-analysis's =approval-record. If storage stays in git notes, only the format changes, so the code shrinks little. This is a guess, not a measurement. |
 
 ## Inventory
@@ -157,3 +194,6 @@ test files passed. It could not check host-only numbers (callers, runs, transcri
 It also suggested a missed alternative: extract the review record (`agent-verdict`, `agent-show`, `agent-review.jq`,
 302 lines) into its own git review tool. It judged that this moves the complexity rather than removing it, and I agree.
 =verdicts-as-approvals is the place to revisit it.
+
+The sections "The ideal version" and "Today's tool against it", and the Dagu and layering rows, were written after
+this critique for Darrion's amended brief (bba6639). A second critique read them; see below.
