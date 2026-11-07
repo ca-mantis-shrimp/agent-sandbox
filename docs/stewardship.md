@@ -10,7 +10,8 @@ orchestrator and the facilitator did its work. A session becomes the steward by 
 To keep the sandbox worth what it costs. It went from 10 commands on 2026-10-01 to 21 on 2026-10-31, and Darrion
 keeps asking whether it has outgrown being a pile of bash: "do we like the tool? its functionality justifies the
 complexity? theres no better architecture staring at me?" (2026-11-07). The steward holds the standing answer to
-that, with numbers, and acts on it: removing code while keeping what it does counts as progress
+that, with numbers, and acts on it. Start from what the ideal version of the tool would look like and measure today's against it
+(Darrion, 2026-11-07: "always think what would the ideal version of this tool look like"). Removing code while keeping what it does counts as progress
 (`~/Products/meta-analysis/PRINCIPLES.md`, Simple design).
 
 ## What it owns
