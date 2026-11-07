@@ -28,7 +28,7 @@ belongs to whoever measures.
 ## Today's tool against it
 
 **It is close to the ideal, and it earns its complexity. No rebuild is warranted.** Lines by job (`wc -l`, the unit and
-completions included):
+completions included). Each whole file is assigned to its main job, so the sizes are approximate: `agents/session` also records, `agent-systemd.sh` also isolates, and `agent-runs.sh` serves several jobs.
 
 | Job | Today | Lines |
 | --- | --- | ---: |
@@ -49,7 +49,7 @@ completions included):
 - **Bigger than the ideal within a job.** Landing is mostly multi-repo submodule landing: 16 of the 59 findings and 12
   fix commits for 457 lines. Platform uses it: 15 submodule merges since 2026-10-01. Running and recording is the
   largest job (912). It is the record any driver reads, and the next section shows that Dagu does not hold the same
-  state. How much smaller the ideal would be within these jobs is a guess: perhaps 10–20%, mostly in landing.
+  state. I have not measured how much smaller an ideal version of these jobs would be, so I give no number.
 - **Use.** 126 workspaces, 453 sessions and 92 gated landings in four weeks (`/var/lib/agent-runs`, 2026-10-10 to
   2026-11-07). Three repositories call it from code (assistant, meta-analysis, platform). Six repositories ran work
   in it: srr 52 workspaces, agent-sandbox 32, platform 18, assistant 7, meta-analysis 6, yapdm 2. The other 9 were
@@ -63,14 +63,30 @@ completions included):
   a port of roughly 3k code lines and 3.7k test lines. Shellcheck is cheap but narrow. It catches the 16 no-op `! cmd`
   assertions (SC2251) and quoting, not lost pipeline statuses or races, so it is hygiene, not the answer to those.
 
+## The open question: one tool or two
+
+The second critique asked whether the five jobs make the ideal *sandbox* or the ideal *development tool*. Jobs 1–3
+(isolate, run and record, carry; about 1,630 lines, plus part of the 424 shared) are a runner. Jobs 4–5 and the driver helpers (gate and land,
+review record, fix and review-status; about 930 lines, plus the rest of the shared) are a lander that uses the runner for its gate. Splitting
+them would remove no code, but it would give each tool one job and a clear interface between them (Simple design):
+
+- **Keep one tool.** Costs nothing now. The boundary stays implicit, and the "too big for bash" question keeps
+  attaching to the whole.
+- **Split into a runner and a lander.** It costs one move and its tests, a second pin for each host, and callers that
+  learn two names; `agent-land`'s gate would call the runner's unit through a stated interface. The runner would get
+  small enough to argue about on its own.
+
+Splitting is a change to the design, so it is Darrion's call (⏸ Decision). The steward's recommendation is held
+until Darrion answers.
+
 ## The suspected overlaps
 
 | Suspicion | Finding |
 | --- | --- |
 | Dagu workflows re-encode fix, review-status and land | No. `wf-cycle` and `wf-land` call `agent-review-status`, `agent-fix`, `agent-harvest` and `agent-land` as primitives. None of them parses reviews, builds fix prompts or merges. The workflow sequences; the sandbox does each step. |
-| Run bookkeeping (`agent-status`, `-show`, `-result`, `-review-status`, `-mailbox`, `-reconcile`) duplicates the history and waiting state Dagu keeps | No. Dagu started 127 of the 174 sessions since it arrived on 2026-10-31 (73%, refs under `~/.local/state/workflows`). The rest, started by hand or by `clearhead-work`, have only the sandbox's records. Dagu also sees only a step's exit code and stdout. The unit outcome, commits, closing message, review report, questions and tool calls exist only in the session records: `agent-reconcile` writes them, and `agent-result` and `agent-status` read them. `agent-show` reads git notes, and `agent-mailbox` is an ssh inbox; neither touches run state. The one overlap is waiting (`wf-session` around `agent-result --wait`), and it exists because the unit outlives a restarted Dagu step. Making `wf-cycle` declarative is meta-analysis's choice, and it would not remove sandbox code: its steps are these commands. |
+| Run bookkeeping (`agent-status`, `-show`, `-result`, `-review-status`, `-mailbox`, `-reconcile`) duplicates the history and waiting state Dagu keeps | No. Dagu started 127 of the 174 sessions since it arrived on 2026-10-31 (73%, refs under `~/.local/state/workflows`). The rest, started by hand or by `clearhead-work`, have only the sandbox's records. Dagu could keep copies of the record, since `agent-result` prints it as JSON on stdout (today `wf-session` discards it). But a copy cannot replace a record that a quarter of the sessions never send through Dagu, and the unit outlives a restarted Dagu step, so the sandbox's record has to stay the source. Questions are in question files and tool calls in transcripts, both sandbox-only. `agent-show` reads git notes, and `agent-mailbox` is an ssh inbox; neither touches run state. Waiting is the clearest overlap (`wf-session` around `agent-result --wait`). Making `wf-cycle` declarative is meta-analysis's choice, and it would not remove sandbox code: its steps are these commands. |
 | Isolation duplicates podman, systemd-nspawn or bubblewrap | No. Isolation is `agent@.service`, 79 lines of systemd directives. |
-| Layering adds little over plain mkosi | It adds the ability to vary harness and project independently on one pinned base. Today there are one harness layer and three project layers (meta-analysis, platform, yapdm; srr needs none). With plain mkosi, each project would get a whole image, and every harness update would rebuild all of them. The layering costs a few lines in `agent-layer` and `ensure_layers` (34) and two `ExtensionImages` lines. Plain mkosi would still need the staleness logic. Not worth changing, and Darrion said not to fixate on it. |
+| Layering adds little over plain mkosi | It adds the ability to vary harness and project independently on one pinned base. Today there are one harness layer and three project layers (meta-analysis, platform, yapdm; srr needs none). With plain mkosi, each project would get a whole image, and every harness update would rebuild all of them. Whole images per project are one plain-mkosi design, not the only one. The layering's cost is spread across `agent-layer`, `ensure_layers`, `hold_layers`, `layers_json`, the slot wiring in `write_agent_run` and two `ExtensionImages` lines, and I have not measured it. It is not worth changing on present evidence, and Darrion said not to fixate on it. |
 | Verdicts belong on the approval record | Probably, later. =verdicts-as-approvals already plans it and waits on meta-analysis's =approval-record. If storage stays in git notes, only the format changes, so the code shrinks little. This is a guess, not a measurement. |
 
 ## Inventory
@@ -196,4 +212,15 @@ It also suggested a missed alternative: extract the review record (`agent-verdic
 =verdicts-as-approvals is the place to revisit it.
 
 The sections "The ideal version" and "Today's tool against it", and the Dagu and layering rows, were written after
-this critique for Darrion's amended brief (bba6639). A second critique read them; see below.
+this critique for Darrion's amended brief (bba6639). The same model critiqued them in run 20261107-173748/1. It
+confirmed all eight job sums (3,260 lines), the gate passed again, and its verdict was land after fixes. Its findings,
+all taken:
+
+- The 10–20% guess had no denominator and no concrete cuts. It is removed.
+- The Dagu row confused who owns the session facts with who can see them: `agent-result` prints them, so Dagu
+  could keep copies. It also misplaced questions and tool calls. Both are rewritten.
+- The job table assigns whole files, so its sizes are approximate. Now labelled.
+- The plain-mkosi counterfactual was overstated, and the layering's cost understated. Both are now qualified, and
+  the cost is unmeasured.
+- It asked whether the five jobs make the ideal sandbox or the ideal development tool. That question is now
+  "The open question: one tool or two", for Darrion.
