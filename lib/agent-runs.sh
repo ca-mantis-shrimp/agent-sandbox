@@ -57,6 +57,15 @@ held_workspaces() ( # <repository>
         [ -f "$held_dir/manifest.json" ] || continue
         origin=$(workspace_repo "$held_dir") || exit 2
         case "$origin" in /*) ;; *) echo 'agent-sandbox > manifest repo must be absolute' >&2; exit 2 ;; esac
+        # Deleted scratch origins cannot hold this checkout. Check the nearest
+        # existing ancestor so permission denial is not mistaken for absence.
+        origin_parent=$origin
+        while [ ! -e "$origin_parent" ]; do
+            origin_parent=${origin_parent%/*}
+            [ -n "$origin_parent" ] || origin_parent=/
+        done
+        [ -d "$origin_parent" ] && [ -x "$origin_parent" ] || exit 2
+        [ "$origin_parent" = "$origin" ] || continue
         origin=$(CDPATH= cd -- "$origin" 2>/dev/null && pwd -P) || exit 2
         [ "$origin" = "$held_repo" ] || continue
         live_sessions=$(running_sessions "$held_dir" writers) || exit 2
