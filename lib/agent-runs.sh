@@ -61,6 +61,8 @@ held_workspaces() ( # <repository>
         # existing ancestor so permission denial is not mistaken for absence.
         origin_parent=$origin
         while [ ! -e "$origin_parent" ]; do
+            # An unresolved link may point into an inaccessible tree.
+            [ ! -L "$origin_parent" ] || exit 2
             origin_parent=${origin_parent%/*}
             [ -n "$origin_parent" ] || origin_parent=/
         done

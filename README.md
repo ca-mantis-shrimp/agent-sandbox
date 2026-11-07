@@ -210,7 +210,7 @@ editing, and a session can start after the check. It tracks the host checkout
 named by the workspace manifest, not every independent clone of the same remote.
 Manifest `.repo` paths must be absolute; relative paths are refused, not resolved
 against the caller's directory. Deleted origins are skipped, while inaccessible
-origins and unreadable or corrupt manifests still fail closed. Linked Git worktrees are distinct checkouts for
+origins, unresolved symlinks and unreadable or corrupt manifests still fail closed. Linked Git worktrees are distinct checkouts for
 hold matching, even though their default hooks directory is shared: a hold on
 one worktree does not hold its siblings.
 It does not install a `merge=union` attribute for `.actions` files: a refused
