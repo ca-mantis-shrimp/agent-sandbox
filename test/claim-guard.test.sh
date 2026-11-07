@@ -39,6 +39,37 @@ echo active >"$TEST_STATE"
 not_held "$repo"
 git -C "$repo" commit -q --allow-empty -m no-sessions
 [ ! -e "$TEST_LOG" ]
+# A deleted scratch origin must not poison unrelated hold checks or commits.
+mkdir -p "$AGENT_RUNS/deleted/sessions"
+jq -n --arg repo "$tmp/deleted/scratch/repo" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
+echo '{"n":1,"state":"running"}' >"$AGENT_RUNS/deleted/sessions/1.json"
+not_held "$repo"
+git -C "$repo" commit -q --allow-empty -m deleted-origin
+[ ! -e "$TEST_LOG" ]
+# An inaccessible origin is not proof of absence; keep failing closed.
+mkdir -p "$tmp/private/origin"
+jq -n --arg repo "$tmp/private/origin" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
+chmod 000 "$tmp/private"
+if [ ! -x "$tmp/private" ]; then
+    code=0
+    agent-status --held "$repo" >"$tmp/out" 2>"$tmp/error" || code=$?
+    [ "$code" -eq 2 ]
+    fails git -C "$repo" commit -q --allow-empty -m inaccessible-origin 2>"$tmp/error"
+    grep -q 'cannot check repository holds' "$tmp/error"
+fi
+chmod 700 "$tmp/private"
+# Bad manifest data must still fail closed, even for an unrelated workspace.
+for origin in relative ''; do
+    jq -n --arg repo "$origin" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
+    code=0
+    agent-status --held "$repo" >"$tmp/out" 2>"$tmp/error" || code=$?
+    [ "$code" -eq 2 ]
+done
+printf '{\n' >"$AGENT_RUNS/deleted/manifest.json"
+fails git -C "$repo" commit -q --allow-empty -m corrupt-origin 2>"$tmp/error"
+grep -q 'cannot check repository holds' "$tmp/error"
+# Keep the deleted origin present throughout the remaining active-holder checks.
+jq -n --arg repo "$tmp/deleted/scratch/repo" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
 # Readers alone do not hold or query units, even with an unavailable manager.
 echo '{"n":1,"state":"running","read_only":true}' >"$AGENT_RUNS/a/sessions/1.json"
 echo '{"n":2,"state":"finished"}' >"$AGENT_RUNS/a/sessions/2.json"
