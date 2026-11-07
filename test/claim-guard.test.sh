@@ -49,15 +49,27 @@ git -C "$repo" commit -q --allow-empty -m deleted-origin
 # An inaccessible origin is not proof of absence; keep failing closed.
 mkdir -p "$tmp/private/origin"
 jq -n --arg repo "$tmp/private/origin" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
+ln -s "$tmp/private/origin" "$tmp/private-link"
 chmod 000 "$tmp/private"
 if [ ! -x "$tmp/private" ]; then
-    code=0
-    agent-status --held "$repo" >"$tmp/out" 2>"$tmp/error" || code=$?
-    [ "$code" -eq 2 ]
-    fails git -C "$repo" commit -q --allow-empty -m inaccessible-origin 2>"$tmp/error"
-    grep -q 'cannot check repository holds' "$tmp/error"
+    for origin in "$tmp/private/origin" "$tmp/private-link"; do
+        jq -n --arg repo "$origin" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
+        code=0
+        agent-status --held "$repo" >"$tmp/out" 2>"$tmp/error" || code=$?
+        [ "$code" -eq 2 ]
+        fails git -C "$repo" commit -q --allow-empty -m inaccessible-origin 2>"$tmp/error"
+        grep -q 'cannot check repository holds' "$tmp/error"
+    done
+else
+    echo 'SKIP: inaccessible-origin permissions cannot be tested as this user' >&2
 fi
 chmod 700 "$tmp/private"
+# An unresolved symlink cannot prove absence: its target may be inaccessible.
+ln -s "$tmp/absent-target" "$tmp/unresolved-link"
+jq -n --arg repo "$tmp/unresolved-link" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
+code=0
+agent-status --held "$repo" >"$tmp/out" 2>"$tmp/error" || code=$?
+[ "$code" -eq 2 ]
 # Bad manifest data must still fail closed, even for an unrelated workspace.
 for origin in relative ''; do
     jq -n --arg repo "$origin" '{repo:$repo}' >"$AGENT_RUNS/deleted/manifest.json"
