@@ -45,6 +45,7 @@ prompt=$(jq -r '.[3]' "$CAPTURE")
 case "$prompt" in 'Run kind: fix. Target: '*) ;; *) echo 'fix prompt lacks one-line run-kind header' >&2; exit 1 ;; esac
 printf '%s\n' "$prompt" | grep -qF 'Target: review session ws/10.'
 printf '%s\n' "$prompt" | grep -qF 'Review verdict: land after fixes'
+printf '%s\n' "$prompt" | grep -qF 'pass the repository gate with its own tests'
 # The JSON values are preserved, including extra fields and nullable locations.
 findings=$(printf '%s\n' "$prompt" | jq -Rs 'capture("```json\n(?<body>[^\n]*)\n```").body | fromjson')
 [ "$(printf '%s\n' "$findings" | jq -c .)" = "$(printf '%s\n' "$report" | jq -c '[.findings | to_entries[] | .value + {id:("10#" + ((.key+1)|tostring))} | select(.severity != "nit")]')" ]

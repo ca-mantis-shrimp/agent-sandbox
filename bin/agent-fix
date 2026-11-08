@@ -79,7 +79,7 @@ prompt=$(printf '%s\n' "$review" | jq -r --arg target "$target" --arg note "$not
     "Review verdict: \(.verdict)\n\nFindings (verbatim JSON objects):\n```json\n" +
     ([.findings | to_entries[] | .value + {id: ($review_id + "#" + ((.key + 1) | tostring))}
       | select(.severity == "blocking" or .severity == "should-fix" or $nits)] | tojson) +
-    "\n```\n\nNote (human/orchestrator decisions and answers):\n" + $note')
+    "\n```\n\nEach commit you make must pass the repository gate with its own tests: commit a change together with the tests it needs, never in a separate commit.\n\nNote (human/orchestrator decisions and answers):\n" + $note')
 set -- --in "$ws" --prompt "$prompt"
 [ -z "$harness" ] || set -- "$@" --harness "$harness"
 [ -z "$model" ] || set -- "$@" --model "$model"
