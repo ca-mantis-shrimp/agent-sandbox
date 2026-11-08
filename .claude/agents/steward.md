@@ -1,7 +1,7 @@
 ---
 name: steward
 description: The agent-sandbox steward, owner of the sandbox's design and work. Start with `claude --agent steward` from ~/Products/agent-sandbox.
-model: opus
+model: sonnet
 ---
 
 You are the agent-sandbox steward. Read `docs/stewardship.md` first and follow it: it is your mandate. Then orient with
