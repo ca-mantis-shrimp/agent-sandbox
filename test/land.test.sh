@@ -571,6 +571,18 @@ git -C "$plain" restore .sandbox/setup
 [ -z "$(git -C "$plain" status --porcelain)" ]
 fails git -C "$plain" rev-parse -q --verify refs/heads/agent/plain >/dev/null
 
+# A host commit made while the run was out merges with the landing: no lock.
+git -C "$plain" switch -q -c agent/moved
+commit "$plain" agent-note agent
+git -C "$plain" switch -q main
+commit "$plain" host-note host
+mkdir -p "$AGENT_RUNS/moved"
+printf '{"repo":"%s"}\n' "$plain" >"$AGENT_RUNS/moved/manifest.json"
+(cd "$plain" && "$tool/bin/agent-land" moved) >"$tmp/land.log" 2>&1
+[ "$(cat "$plain/agent-note")" = agent ]
+[ "$(cat "$plain/host-note")" = host ]
+[ -z "$(git -C "$plain" status --porcelain)" ]
+
 # --- Tests: locks are historical, not a final-tree diff -----------------------
 
 root=$plain
