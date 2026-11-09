@@ -128,7 +128,6 @@ Run these from the host, not inside an agent session. The unfiltered `agent-stat
 | wait until a running session asks a question | `agent-status --wait-question` |
 | answer a session question | `agent-answer <workspace>/<question> <text\|file>` |
 | check whether a repository is held | `agent-status --held <repo-path>` |
-| explicitly install the host commit guard | `agent-doctor --install-hooks <repo-path>` |
 | check this host's setup | `agent-doctor` |
 
 `agent-run` prints `<workspace>/<n>` and normally returns once the unit is up. A prompt names a file if it exists, otherwise it is literal text. `agent-result --wait` blocks until the named session (or all sessions in the workspace) stops and finalizes records. Its exit codes are 0 for finished/ready, 1 for failed/stopped, 3 for running/preparing. A normal harness exit is not proof that the task succeeded: read the closing message.
@@ -169,52 +168,20 @@ Host commands never run Git in agent-writable clones. Writers export plain data 
 - **Aggregate** totals sum only `reported` sessions. Each field has `observed_sessions`, `missing_sessions` (reported sessions lacking it), `unobserved_sessions` (every session not contributing to the sum) and `lower_bound_sum` (reported plus partial). `complete` is true only when every session is `reported` with all four counters. A failure to reduce the workspace exits non-zero without partial output. Session numbers must be canonical positive decimals of at most 15 digits (`1`, not `01`, `0` or longer); a malformed `<n>` or a digit-only `sessions/*.json` name such as `01.json` makes the command exit non-zero with no stdout rather than hide or double-count a session.
 - **Model and route:** `record_model` is the requested model; `observed_models` and `observed_providers` appear only when the transcript carries them (Claude's `system.init` model; pi's per-message `provider`). A provider is the pi route, not a billing account or subscription. Claude's route is unknown, and older sessions are never inferred from the current `run.env`.
 
-## Host commit guard
+## Held repositories
 
-Do not edit a project's tracked files on the host while a session holds it.
-`agent-status --held <repo-path>` prints the holding workspace ids and unit
-ActiveState, tab-separated, one per line. It exits **0 when held**, **3 when not
-held**, or **2 for invalid input/record errors**. Other failures are also errors,
-never a not-held answer.
+`agent-status --held <repo-path>` is information, not a lock: it prints the
+holding workspace ids and unit ActiveState, tab-separated, one per line. It exits
+**0 when held**, **3 when not held**, or **2 for invalid input/record errors**.
+Host commits are never refused; a landing merges onto a host that moved during
+the run, and a conflict stops that landing for a human.
 Paths inside the repository and symlink aliases resolve to the same checkout.
-Only writer sessions hold the repository; read-only reviews do not conflict
-with host commits. Records without `read_only` count as writers. Running records are
-checked against the unit: stopped units release stale holds; unavailable manager
-state conservatively retains them, shown as `unavailable`. A failed unit query
-also retains the hold, even if it printed a stopped state. Corrupt or unreadable
-session records refuse the check. No sessions means no hold and no unit query.
-
-Opt in separately in each **host clone**:
-
-```sh
-agent-doctor --install-hooks /path/to/repository
-```
-
-This installs an executable `pre-commit` hook at Git's hooks path (honoring
-`core.hooksPath`), refuses to replace a human's hook, and is safe to repeat.
-The installed stub forwards to this tool checkout's `lib/agent-pre-commit.sh`, so
-moving that checkout's revision updates the guard without reinstalling hooks.
-Reinstalling upgrades old byte-copied guards identified by their
-`# Installed explicitly by agent-doctor --install-hooks. Host PATH declares tools.`
-marker line; unmarked hooks and symlinks are never replaced. If the installed
-checkout moves or disappears, commits fail closed until the guard is reinstalled.
-It never installs silently or into workspace snapshots. The guard resolves
-`bin/agent-status` beside its own checkout, not from the host's `PATH`; a missing
-command fails closed. The hook names every holding
-workspace and refuses the commit; check failures also refuse rather than silently
-allowing a commit. Only the human's explicit `git commit --no-verify` bypasses it;
-there is no sandbox bypass setting.
-
-This is a commit-time coordination guard, not a file lock: it does not prevent
-editing, and a session can start after the check. It tracks the host checkout
-named by the workspace manifest, not every independent clone of the same remote.
-Manifest `.repo` paths must be absolute; relative paths are refused, not resolved
-against the caller's directory. Deleted origins are skipped, while inaccessible
-origins, unresolved symlinks and unreadable or corrupt manifests still fail closed.
-Linked Git worktrees are distinct checkouts for hold matching, even though their
-default hooks directory is shared: a hold on one worktree does not hold its siblings.
-It does not install a `merge=union` attribute for `.actions` files: a refused
-commit or merge conflict is preferable to a garbled action line.
+Only writer sessions hold the repository; read-only reviews do not. Records
+without `read_only` count as writers. Running records are checked against the
+unit: stopped units release stale holds; unavailable manager state retains
+them, shown as `unavailable`. Corrupt or unreadable records refuse the check.
+Manifest `.repo` paths must be absolute. Linked Git worktrees are distinct
+checkouts for hold matching.
 
 ## Review, fix and land
 

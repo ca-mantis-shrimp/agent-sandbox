@@ -117,3 +117,12 @@ Why: Darrion asked for "only active stuff you need from me not the ones that wer
 just be thrown to a fix agent". The full thread on 20261031-223325 showed eight findings with none needing
 them. The steward already records the landing summary; showing that avoids inventing a second finding-state
 model while retaining the entire conversation behind `--all`.
+
+## Decision 9: No host commit lock
+
+Darrion, 2026-11-09: "we have git, there is no good reason we need a lock on the repo". The pre-commit hook,
+`agent-doctor --install-hooks` and the README's Host commit guard are gone. A host commit made during a run merges
+with the landing (tested in `land.test.sh`); a conflict in a file both sides touched stops that landing for a human.
+`agent-status --held` stays as information (`test/held.test.sh`). Why: the hook refused the facilitator's platform
+commits twice in one day while landings had already merged cleanly onto a moved host. The lasting fix for `.actions`
+conflicts is `=semantic-merge` in platform, not a lock.

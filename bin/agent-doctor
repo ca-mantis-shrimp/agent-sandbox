@@ -1,50 +1,8 @@
 #!/bin/sh
-# Read-only host checks, or explicit host-clone hook installation.
+# Read-only host checks.
 # The root-only Claude credential is a note.
 set -u
 tool=$(dirname -- "$(dirname -- "$(readlink -f -- "$0")")")
-if [ "$#" -gt 0 ]; then
-    [ "$#" -eq 2 ] && [ "$1" = --install-hooks ] || {
-        echo 'usage: agent-doctor [--install-hooks <repo>]' >&2; exit 2;
-    }
-    (
-        set -eu
-        cd -- "$2"
-        root=$(git rev-parse --show-toplevel)
-        cd -- "$root"
-        hooks=$(git rev-parse --git-path hooks)
-        hook="$hooks/pre-commit"
-        # Both the old byte-copy and the forwarding stub have this marker.
-        # Symlinks and unmarked human hooks are never replaced.
-        marker='# Installed explicitly by agent-doctor --install-hooks. Host PATH declares tools.'
-        owned=false
-        if [ -e "$hook" ] || [ -L "$hook" ]; then
-            if [ ! -L "$hook" ] && [ -f "$hook" ] && grep -qxF "$marker" "$hook"; then
-                owned=true
-            else
-                echo "agent-doctor > refusing to replace existing hook: $hook" >&2
-                exit 1
-            fi
-        fi
-        mkdir -p "$hooks"
-        # Quote the resolved checkout path even when it contains single quotes.
-        target=$(printf '%s' "$tool/lib/agent-pre-commit.sh" | sed "s/'/'\\\\''/g")
-        stub=$(printf '#!/bin/sh\n%s\nexec sh '\''%s'\'' "$@"\n' "$marker" "$target")
-        if [ "$owned" = true ]; then
-            replacement=$(mktemp "$hooks/.agent-pre-commit.XXXXXX")
-            trap 'rm -f "$replacement"' EXIT
-            printf '%s\n' "$stub" >"$replacement"
-            chmod +x "$replacement"
-            mv -f "$replacement" "$hook"
-        else
-            # Noclobber also refuses a hook created after the check above.
-            (set -C; printf '%s\n' "$stub" >"$hook")
-            chmod +x "$hook"
-        fi
-        echo "agent-doctor > installed claim guard: $hook"
-    )
-    exit $?
-fi
 failed=0
 ok() { printf 'agent-doctor > ok       %s\n' "$*"; }
 missing() { printf 'agent-doctor > MISSING  %s\n' "$*"; failed=1; }

@@ -37,7 +37,7 @@ completions included). Each whole file is assigned to its main job, so the sizes
 | 3 Carry | `agents/export`, `agent-harvest` | 118 |
 | 4 Gate and land | `agent-land` | 457 |
 | 5 Review record | `agent-verdict`, `agent-show`, `agent-review.jq` | 302 |
-| Shared | `agent-runs.sh`, the `agent` dispatcher and completions, the commit guard | 424 |
+| Shared | `agent-runs.sh`, the `agent` dispatcher and completions | 424 |
 | Driver helpers | `agent-fix`, `agent-review-status` | 169 |
 | None of the five | `agent-usage` 236, `agent-mailbox` 43 | 279 |
 
