@@ -273,6 +273,9 @@ commit "$root/sub/leaf" state nested-owned
 owned_leaf=$(head_of "$root/sub/leaf")
 git -C "$root/sub/leaf" switch -q main
 fails git -C "$root/sub" show-ref --verify --quiet refs/heads/agent/nested-owned
+# A driver's landing trailers join every landing message; a line that is not a trailer is dropped.
+printf '%s
+' 'Intent: urn:uuid:01a1be13-3476-7fb2-b736-9511e82c6c0b' 'not a trailer' >"$AGENT_RUNS/nested-owned/landing-trailers"
 : >"$GATE_LOG"
 fails land nested-owned false
 [ -s "$GATE_LOG" ]
@@ -286,6 +289,10 @@ leaf_tip=$(head_of "$candidate/sub/leaf")
 [ "$(git -C "$candidate/sub" rev-parse HEAD^)" = "$parent_base" ]
 [ "$(git -C "$candidate/sub" rev-list --parents -n1 HEAD | wc -w)" -eq 2 ]
 git -C "$candidate/sub" log -1 --format=%B | grep -Fqx 'Agent-Workspace: nested-owned'
+for r in "$candidate/sub" "$candidate"; do
+    [ "$(git -C "$r" log -1 --format='%(trailers:key=Intent,valueonly)')" = 'urn:uuid:01a1be13-3476-7fb2-b736-9511e82c6c0b' ]
+    [ -z "$(git -C "$r" log -1 --format=%B | grep -F 'not a trailer')" ]
+done
 git -C "$candidate/sub/leaf" merge-base --is-ancestor "$owned_leaf" HEAD
 [ "$(git -C "$candidate/sub" rev-parse HEAD:leaf)" = "$leaf_tip" ]
 [ "$(git -C "$candidate" rev-parse HEAD:sub)" = "$parent_tip" ]
