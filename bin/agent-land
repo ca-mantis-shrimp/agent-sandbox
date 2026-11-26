@@ -220,6 +220,10 @@ commit_with_workspace_message() { # <repo> <title>
         printf '%s\n\n' "$2"
         [ -z "$work_closing" ] || printf '%s\n\n' "$work_closing"
         printf 'Agent-Workspace: %s\n' "$id"
+        # A driver above the runner, such as ClearHead's clearhead-work, may add trailers of its own; only
+        # well-formed "Key: value" lines are kept, so a stray line cannot break the trailer block.
+        [ ! -f "$run/landing-trailers" ] ||
+            grep -E '^[A-Za-z][A-Za-z0-9-]*: [^[:space:]]' "$run/landing-trailers" || true
         if [ "$1" = "$cand" ] && [ -n "$finding_trailers" ]; then
             printf '%s\n' "$finding_trailers"
         fi
