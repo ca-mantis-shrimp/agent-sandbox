@@ -59,6 +59,11 @@ cd "$run/work"
 # workspace's commits.
 git switch -q -c "$branch" && git update-ref refs/agent/base HEAD
 git submodule -q foreach "git switch -q -c $branch && git update-ref refs/agent/base HEAD"
+# Workers run each repo's tracked hooks, as a human clone does once it enables them (e.g. platform's commit-msg
+# Intent warning and clearhead doctor pre-commit). They run only inside the sandbox: the host runs no hook-firing
+# git in work/, and harvest moves commits out as fsck-checked bundles.
+[ ! -d .githooks ] || git config core.hooksPath .githooks
+git submodule -q foreach --recursive '[ ! -d .githooks ] || git config core.hooksPath .githooks'
 
 # pi reuses the host's user-level config, minus packages that break headless,
 # sandboxed runs: background tasks outlive the session, remote-pi opens a
