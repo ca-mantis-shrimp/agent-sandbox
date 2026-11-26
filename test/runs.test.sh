@@ -150,8 +150,16 @@ run="$AGENT_RUNS/$id"
 jq -e '.packages == ["npm:keep"] and .theme == "test"' "$run/pi/settings.json" >/dev/null
 [ "$(cat "$run/pi/agents/custom.md")" = custom ]
 [ ! -e "$run/work/must-not-create" ]
+[ -z "$(git -C "$run/work" config core.hooksPath || true)" ]
 rm -rf "$HOME/.pi"
+# A repo's tracked hooks run in the workspace clone, as in a human clone that enabled them.
+mkdir -p "$repo/.githooks"
+printf '#!/bin/sh\n' >"$repo/.githooks/commit-msg"
+chmod +x "$repo/.githooks/commit-msg"
+git -C "$repo" add .githooks
+git -C "$repo" -c user.name=t -c user.email=t@t commit -q -m hooks
 id=$(cd "$repo" && "$tool/bin/agent-new")
+[ "$(git -C "$AGENT_RUNS/$id/work" config core.hooksPath)" = .githooks ]
 [ "$(readlink "$AGENT_RUNS/$id/pi/auth.json")" = /srv/pi-login/auth.json ]
 [ ! -e "$AGENT_RUNS/$id/pi/settings.json" ]
 [ ! -e "$AGENT_RUNS/$id/pi/agents" ]
